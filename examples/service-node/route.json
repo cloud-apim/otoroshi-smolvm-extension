@@ -1,0 +1,17 @@
+{
+  "_comment": "Drop this object into an Otoroshi route's 'plugins' array. Otoroshi reverse-proxies to the HTTP server running in the micro-VM.",
+  "plugin": "cp:otoroshi_plugins.com.cloud.apim.plugins.smolvm.SmolVmFunctionBackend",
+  "enabled": true,
+  "config": {
+    "mode": "service",
+    "hosts": ["http://127.0.0.1:8080"],
+    "image": "smolvm-service-node:latest",
+    "service_port": 8080,
+    "readiness_path": "/health",
+    "network_enabled": true,
+    "readiness_timeout": 15000,
+    "request_timeout": 30000,
+    "boot_timeout": 60000,
+    "isolation": "ephemeral"
+  }
+}
