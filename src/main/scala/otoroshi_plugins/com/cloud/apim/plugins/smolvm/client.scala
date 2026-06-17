@@ -3,6 +3,7 @@ package otoroshi_plugins.com.cloud.apim.plugins.smolvm
 import akka.stream.scaladsl.Source
 import akka.util.ByteString
 import otoroshi.env.Env
+import play.api.Logger
 import play.api.libs.json.Json
 import play.api.libs.ws.DefaultBodyWritables._
 import play.api.libs.ws.WSResponse
@@ -19,11 +20,15 @@ case class SmolProxyResponse(status: Int, headers: Map[String, String], body: So
  */
 class SmolVmClient(env: Env) {
 
+  private val logger = Logger("cloud-apim-smolvm")
+
   private def api(host: String, path: String): String = s"${host.stripSuffix("/")}/api/v1$path"
 
-  private def okUnit(action: String)(r: WSResponse): Either[String, Unit] =
+  private def okUnit(action: String)(r: WSResponse): Either[String, Unit] = {
+    logger.debug(s"smolvm $action -> HTTP ${r.status}")
     if (r.status >= 200 && r.status < 300) Right(())
     else Left(s"$action returned ${r.status}: ${r.body.take(512)}")
+  }
 
   /** Liveness of a host: any non-5xx answer on the machines list. */
   def health(host: String, timeout: FiniteDuration)(implicit ec: ExecutionContext): Future[Boolean] =
@@ -72,7 +77,8 @@ class SmolVmClient(env: Env) {
 
   def exec(host: String, name: String, req: ExecRequest, timeout: FiniteDuration)(implicit
       ec: ExecutionContext
-  ): Future[Either[String, ExecResponse]] =
+  ): Future[Either[String, ExecResponse]] = {
+    logger.debug(s"POST ${api(host, s"/machines/$name/exec")} command=[${req.command.mkString(" ")}] stdin=${req.stdin.fold(0)(_.length)}b")
     env.Ws
       .url(api(host, s"/machines/$name/exec"))
       .withRequestTimeout(timeout)
@@ -81,10 +87,12 @@ class SmolVmClient(env: Env) {
       .withBody(ByteString(Json.stringify(req.json)))
       .execute()
       .map { r =>
+        logger.debug(s"smolvm exec -> HTTP ${r.status}")
         if (r.status >= 200 && r.status < 300) ExecResponse.reads(r.json).asEither.left.map(e => s"invalid exec response: $e")
         else Left(s"exec returned ${r.status}: ${r.body.take(512)}")
       }
       .recover { case e => Left(s"exec failed: ${e.getMessage}") }
+  }
 
   /** Pull an OCI image into a machine (idempotent; fast when cached host-side). */
   def pullImage(host: String, name: String, image: String, timeout: FiniteDuration)(implicit
@@ -112,7 +120,8 @@ class SmolVmClient(env: Env) {
   /** Reverse-proxy to a forwarded service port, streaming both ways. */
   def proxy(url: String, method: String, headers: Map[String, String], body: Source[ByteString, _], timeout: FiniteDuration)(
       implicit ec: ExecutionContext
-  ): Future[SmolProxyResponse] =
+  ): Future[SmolProxyResponse] = {
+    logger.debug(s"PROXY $method $url")
     env.Ws
       .url(url)
       .withRequestTimeout(timeout)
@@ -120,5 +129,9 @@ class SmolVmClient(env: Env) {
       .withHttpHeaders(headers.toSeq: _*)
       .withBody(body)
       .stream()
-      .map(resp => SmolProxyResponse(resp.status, resp.headers.mapValues(_.last).toMap, resp.bodyAsSource))
+      .map { resp =>
+        logger.debug(s"smolvm proxy $method $url -> HTTP ${resp.status}")
+        SmolProxyResponse(resp.status, resp.headers.mapValues(_.last).toMap, resp.bodyAsSource)
+      }
+  }
 }
