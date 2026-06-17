@@ -257,14 +257,19 @@ class SmolVmEngine(env: Env) {
         failed(504, s"service did not become ready within ${cfg.readinessTimeout}")
       case true  =>
         val target     = base + inv.relativeUri
-        val fwdHeaders = inv.headers.filterNot { case (k, _) => k.equalsIgnoreCase("Host") }
+        // drop hop-by-hop / length headers; the WS client sets Content-Length from the buffered body
+        val fwdHeaders = inv.headers.filterNot {
+          case (k, _) => k.equalsIgnoreCase("Host") || k.equalsIgnoreCase("Content-Length") || k.equalsIgnoreCase("Transfer-Encoding")
+        }
         logger.info(s"[$name] service ready in ${System.currentTimeMillis() - rdyStart}ms; proxying ${inv.method} -> $target")
-        client
-          .proxy(target, inv.method, fwdHeaders, inv.body, cfg.requestTimeout)
-          .map { resp =>
-            logger.info(s"[$name] upstream responded status=${resp.status}; streaming back (VM deleted when stream completes)")
-            val bodyWithCleanup = resp.body.alsoTo(Sink.onComplete(_ => deleteQuietly(host, name)))
-            InvokeResult.Streamed(resp.status, resp.headers, bodyWithCleanup)
+        inv.body
+          .runFold(ByteString.empty)(_ ++ _)
+          .flatMap { bodyBytes =>
+            client.proxy(target, inv.method, fwdHeaders, bodyBytes, cfg.requestTimeout).map { resp =>
+              logger.info(s"[$name] upstream responded status=${resp.status}; streaming back (VM deleted when stream completes)")
+              val bodyWithCleanup = resp.body.alsoTo(Sink.onComplete(_ => deleteQuietly(host, name)))
+              InvokeResult.Streamed(resp.status, resp.headers, bodyWithCleanup)
+            }
           }
           .recover {
             case e =>
