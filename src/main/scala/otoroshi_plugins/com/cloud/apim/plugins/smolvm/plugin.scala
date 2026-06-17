@@ -216,6 +216,7 @@ class SmolVmFunctionBackend extends NgBackendCall {
   override def defaultConfigObject: Option[NgPluginConfig] = SmolVmFunctionConfig.default.some
   override def configFlow: Seq[String]                     = SmolVmFunctionConfig.configFlow
   override def configSchema: Option[JsObject]              = SmolVmFunctionConfig.configSchema
+  override def noJsForm: Boolean = true
 
   override def start(env: Env): Future[Unit] = {
     SmolVmFunctionBackend.engine(env)
