@@ -47,6 +47,8 @@ class SmolVmEngine(env: Env) {
   private val portBase  = 20000
   private val portRange = 20000
 
+  logger.info(s"[smolvm] SmolVmEngine initialized (service port range $portBase-${portBase + portRange - 1})")
+
   // simple TTL cache for hosts fetched from a URL: url -> (expiresAtMs, hosts)
   private val urlHostsCache = new java.util.concurrent.ConcurrentHashMap[String, (Long, Seq[String])]()
 
@@ -106,18 +108,27 @@ class SmolVmEngine(env: Env) {
 
   private def provision(host: String, name: String, spec: SmolMachineSpec, timeout: FiniteDuration)(implicit
       ec: ExecutionContext
-  ): Future[Either[String, Unit]] =
+  ): Future[Either[String, Unit]] = {
+    logger.debug(s"[$name] create on $host: ${Json.stringify(spec.json)}")
     client.createMachine(host, spec, timeout).flatMap {
-      case Left(err) => Future.successful(Left(err))
+      case Left(err) =>
+        logger.warn(s"[$name] create failed on $host: $err")
+        Future.successful(Left(err))
       case Right(_)  =>
         // smolvm pulls images lazily; pre-pull best-effort so `start` runs the image
         // workload (critical for service mode). Failure is non-fatal: the image may be
         // cached host-side or be a local archive/rootfs.
+        logger.info(s"[$name] created on $host; pulling image '${spec.image}' (best-effort)")
         client.pullImage(host, name, spec.image, timeout).flatMap { pullRes =>
-          pullRes.left.foreach(err => logger.warn(s"pre-pull of '${spec.image}' on $host failed (continuing): $err"))
+          pullRes match {
+            case Left(err) => logger.warn(s"[$name] pre-pull of '${spec.image}' failed (continuing): $err")
+            case Right(_)  => logger.info(s"[$name] image '${spec.image}' ready")
+          }
+          logger.info(s"[$name] starting machine")
           client.start(host, name, timeout)
         }
     }
+  }
 
   private def attemptOnHosts(hosts: Seq[String], name: String, spec: SmolMachineSpec, timeout: FiniteDuration)(implicit
       ec: ExecutionContext
@@ -137,12 +148,14 @@ class SmolVmEngine(env: Env) {
     loop(ordered, "no smolvm host attempted")
   }
 
-  private def deleteQuietly(host: String, name: String)(implicit ec: ExecutionContext): Unit =
+  private def deleteQuietly(host: String, name: String)(implicit ec: ExecutionContext): Unit = {
+    logger.debug(s"[$name] deleting machine on $host")
     client.delete(host, name, 15.seconds).onComplete {
-      case scala.util.Success(Left(err)) => logger.warn(s"could not delete machine $name on $host: $err")
-      case scala.util.Failure(e)         => logger.warn(s"could not delete machine $name on $host: ${e.getMessage}")
-      case _                             => ()
+      case scala.util.Success(Right(_))  => logger.info(s"[$name] machine deleted (teardown done)")
+      case scala.util.Success(Left(err)) => logger.warn(s"[$name] could not delete machine on $host: $err")
+      case scala.util.Failure(e)         => logger.warn(s"[$name] could not delete machine on $host: ${e.getMessage}")
     }
+  }
 
   // ---- spec building --------------------------------------------------------
 
@@ -205,16 +218,26 @@ class SmolVmEngine(env: Env) {
   def invoke(inv: SmolInvocation, cfg: SmolVmFunctionConfig)(implicit ec: ExecutionContext, mat: Materializer): Future[InvokeResult] = {
     if (cfg.image.trim.isEmpty) failed(500, "no image configured for this function")
     else {
+      val bootStart = System.currentTimeMillis()
       hostsFor(cfg).flatMap { hosts =>
-        if (hosts.isEmpty) failed(502, "no smolvm host available (check 'hosts' / 'hosts_url')")
-        else {
+        if (hosts.isEmpty) {
+          logger.warn(s"[${inv.snowflake}] no smolvm host available (hosts=${cfg.hosts}, hosts_url=${cfg.hostsUrl})")
+          failed(502, "no smolvm host available (check 'hosts' / 'hosts_url')")
+        } else {
           val name      = sanitizeName(s"otoroshi-fn-${inv.snowflake}")
           val isService = cfg.mode == "service"
           val hostPort  = if (isService) nextPort() else 0
           val spec      = buildSpec(cfg, name, if (isService) Some((hostPort, cfg.servicePort)) else None)
+          logger.info(
+            s"[$name] invoke mode=${cfg.mode} image=${cfg.image} ${inv.method} ${inv.path} | candidate hosts=${hosts.size}" +
+              (if (isService) s" portMap=$hostPort->${cfg.servicePort}" else "")
+          )
           attemptOnHosts(hosts, name, spec, cfg.bootTimeout).flatMap {
-            case Left(err)   => failed(502, s"could not provision micro-VM: $err")
+            case Left(err)   =>
+              logger.error(s"[$name] could not provision micro-VM: $err")
+              failed(502, s"could not provision micro-VM: $err")
             case Right(host) =>
+              logger.info(s"[$name] booted on $host in ${System.currentTimeMillis() - bootStart}ms; running mode=${cfg.mode}")
               if (isService) runService(host, name, hostPort, cfg, inv)
               else runExec(host, name, cfg, inv)
           }
@@ -230,21 +253,27 @@ class SmolVmEngine(env: Env) {
     val base      = serviceBaseUrl(host, hostPort)
     val readyUrl  = base + cfg.readinessPath
     val deadline  = System.currentTimeMillis() + cfg.readinessTimeout.toMillis
+    val rdyStart  = System.currentTimeMillis()
+    logger.info(s"[$name] service: waiting readiness at $readyUrl (timeout ${cfg.readinessTimeout})")
     waitReady(readyUrl, deadline, 1.second).flatMap {
       case false =>
+        logger.warn(s"[$name] service NOT ready after ${cfg.readinessTimeout} — tearing down")
         deleteQuietly(host, name)
         failed(504, s"service did not become ready within ${cfg.readinessTimeout}")
       case true  =>
         val target     = base + inv.relativeUri
         val fwdHeaders = inv.headers.filterNot { case (k, _) => k.equalsIgnoreCase("Host") }
+        logger.info(s"[$name] service ready in ${System.currentTimeMillis() - rdyStart}ms; proxying ${inv.method} -> $target")
         client
           .proxy(target, inv.method, fwdHeaders, inv.body, cfg.requestTimeout)
           .map { resp =>
+            logger.info(s"[$name] upstream responded status=${resp.status}; streaming back (VM deleted when stream completes)")
             val bodyWithCleanup = resp.body.alsoTo(Sink.onComplete(_ => deleteQuietly(host, name)))
             InvokeResult.Streamed(resp.status, resp.headers, bodyWithCleanup)
           }
           .recover {
             case e =>
+              logger.error(s"[$name] proxy error to $target: ${e.getMessage}")
               deleteQuietly(host, name)
               InvokeResult.Failed(502, s"proxy error: ${e.getMessage}")
           }
@@ -257,6 +286,7 @@ class SmolVmEngine(env: Env) {
   ): Future[InvokeResult] = {
     cfg.execCommand.filter(_.nonEmpty) match {
       case None          =>
+        logger.warn(s"[$name] exec mode but no exec_command configured — tearing down")
         deleteQuietly(host, name)
         failed(500, "exec_command is required for 'exec' mode")
       case Some(command) =>
@@ -272,19 +302,32 @@ class SmolVmEngine(env: Env) {
               workdir = cfg.workdir,
               timeoutSecs = Some(cfg.requestTimeout.toSeconds)
             )
+            logger.info(s"[$name] exec: ${command.mkString(" ")} (stdin ${bytes.size} bytes)")
             client.exec(host, name, execReq, cfg.requestTimeout).map {
-              case Left(err)                              => InvokeResult.Failed(502, err)
+              case Left(err)                              =>
+                logger.warn(s"[$name] exec call failed: $err")
+                InvokeResult.Failed(502, err)
               case Right(resp) if !resp.success           =>
+                logger.warn(s"[$name] function exit=${resp.exitCode} stderr='${resp.stderr.take(256)}'")
                 InvokeResult.Failed(502, s"function exited with ${resp.exitCode}: ${resp.stderr.take(512)}")
               case Right(resp)                            =>
+                logger.info(s"[$name] exec ok exit=0 stdout=${resp.stdout.length}b stderr=${resp.stderr.length}b")
                 ExecEnvelope.parseResponse(resp.stdout) match {
-                  case Left(err) => InvokeResult.Failed(502, s"$err; stderr=${resp.stderr.take(256)}")
-                  case Right(fr) => InvokeResult.Buffered(fr.status, fr.headers, ByteString(fr.body))
+                  case Left(err) =>
+                    logger.warn(s"[$name] could not parse function response: $err")
+                    InvokeResult.Failed(502, s"$err; stderr=${resp.stderr.take(256)}")
+                  case Right(fr) =>
+                    logger.info(s"[$name] function -> status=${fr.status} bytes=${fr.body.length}")
+                    InvokeResult.Buffered(fr.status, fr.headers, ByteString(fr.body))
                 }
             }
           }
           .andThen { case _ => deleteQuietly(host, name) }
-          .recover { case e => InvokeResult.Failed(502, s"exec error: ${e.getMessage}") }
+          .recover {
+            case e =>
+              logger.error(s"[$name] exec error: ${e.getMessage}")
+              InvokeResult.Failed(502, s"exec error: ${e.getMessage}")
+          }
     }
   }
 }
