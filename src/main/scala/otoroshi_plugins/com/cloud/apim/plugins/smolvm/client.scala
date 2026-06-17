@@ -118,10 +118,13 @@ class SmolVmClient(env: Env) {
       .recover { case _ => false }
 
   /** Reverse-proxy to a forwarded service port, streaming both ways. */
-  def proxy(url: String, method: String, headers: Map[String, String], body: Source[ByteString, _], timeout: FiniteDuration)(
+  def proxy(url: String, method: String, headers: Map[String, String], body: ByteString, timeout: FiniteDuration)(
       implicit ec: ExecutionContext
   ): Future[SmolProxyResponse] = {
-    logger.debug(s"PROXY $method $url")
+    logger.debug(s"PROXY $method $url (${body.length}b body)")
+    // body is buffered into an in-memory ByteString (re-subscribable). Passing the raw
+    // single-subscriber request Source to .withBody(...).stream() throws
+    // "Sink.asPublisher(fanout = false) only supports one subscriber".
     env.Ws
       .url(url)
       .withRequestTimeout(timeout)
