@@ -1,6 +1,7 @@
 package otoroshi_plugins.com.cloud.apim.plugins.smolvm
 
 import akka.stream.Materializer
+import akka.util.ByteString
 import otoroshi.env.Env
 import otoroshi.gateway.Errors
 import otoroshi.next.plugins.api._
@@ -235,18 +236,26 @@ class SmolVmFunctionBackend extends NgBackendCall {
     logger.info(
       s"[${ctx.snowflake}] callBackend ENTER route='${ctx.route.name}' ${ctx.request.method} ${ctx.request.relativeUri} mode=${config.mode}"
     )
-    val inv    = SmolInvocation(
-      snowflake = ctx.snowflake,
-      method = ctx.request.method,
-      relativeUri = ctx.request.relativeUri,
-      path = ctx.request.path,
-      query = ctx.request.queryParams,
-      headers = ctx.request.headers,
-      body = ctx.request.body
-    )
-    SmolVmFunctionBackend
-      .engine(env)
-      .invoke(inv, config)
+    // Consume the incoming body exactly once, and ONLY if there is one. The request
+    // Source is single-subscriber; for bodyless requests (e.g. GET) the pipeline may
+    // already have drained it, so touching it again throws "Sink.asPublisher ... one
+    // subscriber". We hand the engine a buffered ByteString.
+    val bodyF: Future[ByteString] =
+      if (ctx.request.hasBody) ctx.request.body.runFold(ByteString.empty)(_ ++ _)
+      else Future.successful(ByteString.empty)
+    bodyF
+      .map { bodyBytes =>
+        SmolInvocation(
+          snowflake = ctx.snowflake,
+          method = ctx.request.method,
+          relativeUri = ctx.request.relativeUri,
+          path = ctx.request.path,
+          query = ctx.request.queryParams,
+          headers = ctx.request.headers,
+          bodyBytes = bodyBytes
+        )
+      }
+      .flatMap(inv => SmolVmFunctionBackend.engine(env).invoke(inv, config))
       .flatMap {
         case InvokeResult.Streamed(status, headers, body) =>
           logger.info(s"[${ctx.snowflake}] callBackend EXIT streamed status=$status (${System.currentTimeMillis() - startMs}ms)")
