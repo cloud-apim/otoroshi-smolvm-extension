@@ -219,8 +219,10 @@ class SmolVmFunctionBackend extends NgBackendCall {
   override def noJsForm: Boolean = true
 
   override def start(env: Env): Future[Unit] = {
+    logger.info("[smolvm] plugin loading: instantiating SmolVmEngine singleton")
     SmolVmFunctionBackend.engine(env)
     env.logger.info("[Cloud APIM] the 'smolvm FaaS' plugin is available!")
+    logger.info("[smolvm] plugin ready (logger name: 'cloud-apim-smolvm' — set it to DEBUG for HTTP-level traces)")
     Future.successful(())
   }
 
@@ -229,6 +231,10 @@ class SmolVmFunctionBackend extends NgBackendCall {
       delegates: () => Future[Either[NgProxyEngineError, BackendCallResponse]]
   )(implicit env: Env, ec: ExecutionContext, mat: Materializer): Future[Either[NgProxyEngineError, BackendCallResponse]] = {
     val config = ctx.cachedConfig(internalName)(SmolVmFunctionConfig.format).getOrElse(SmolVmFunctionConfig.default)
+    val startMs = System.currentTimeMillis()
+    logger.info(
+      s"[${ctx.snowflake}] callBackend ENTER route='${ctx.route.name}' ${ctx.request.method} ${ctx.request.relativeUri} mode=${config.mode}"
+    )
     val inv    = SmolInvocation(
       snowflake = ctx.snowflake,
       method = ctx.request.method,
@@ -242,9 +248,14 @@ class SmolVmFunctionBackend extends NgBackendCall {
       .engine(env)
       .invoke(inv, config)
       .flatMap {
-        case InvokeResult.Streamed(status, headers, body) => Future.successful(sourceBodyResponse(status, headers, body))
-        case InvokeResult.Buffered(status, headers, body) => Future.successful(inMemoryBodyResponse(status, headers, body))
+        case InvokeResult.Streamed(status, headers, body) =>
+          logger.info(s"[${ctx.snowflake}] callBackend EXIT streamed status=$status (${System.currentTimeMillis() - startMs}ms)")
+          Future.successful(sourceBodyResponse(status, headers, body))
+        case InvokeResult.Buffered(status, headers, body) =>
+          logger.info(s"[${ctx.snowflake}] callBackend EXIT buffered status=$status bytes=${body.length} (${System.currentTimeMillis() - startMs}ms)")
+          Future.successful(inMemoryBodyResponse(status, headers, body))
         case InvokeResult.Failed(status, message)         =>
+          logger.warn(s"[${ctx.snowflake}] callBackend EXIT failed status=$status msg='$message' (${System.currentTimeMillis() - startMs}ms)")
           Errors
             .craftResponseResult(
               message,
@@ -259,7 +270,7 @@ class SmolVmFunctionBackend extends NgBackendCall {
       }
       .recover {
         case e: Throwable =>
-          logger.error("smolvm plugin error on backend call", e)
+          logger.error(s"[${ctx.snowflake}] smolvm plugin error on backend call", e)
           Left(NgProxyEngineError.NgResultProxyEngineError(Results.InternalServerError(Json.obj("error" -> e.getMessage))))
       }
   }
