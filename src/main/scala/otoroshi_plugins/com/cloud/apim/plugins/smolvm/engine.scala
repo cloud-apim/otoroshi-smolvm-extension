@@ -115,18 +115,13 @@ class SmolVmEngine(env: Env) {
         logger.warn(s"[$name] create failed on $host: $err")
         Future.successful(Left(err))
       case Right(_)  =>
-        // smolvm pulls images lazily; pre-pull best-effort so `start` runs the image
-        // workload (critical for service mode). Failure is non-fatal: the image may be
-        // cached host-side or be a local archive/rootfs.
-        logger.info(s"[$name] created on $host; pulling image '${spec.image}' (best-effort)")
-        client.pullImage(host, name, spec.image, timeout).flatMap { pullRes =>
-          pullRes match {
-            case Left(err) => logger.warn(s"[$name] pre-pull of '${spec.image}' failed (continuing): $err")
-            case Right(_)  => logger.info(s"[$name] image '${spec.image}' ready")
-          }
-          logger.info(s"[$name] starting machine")
-          client.start(host, name, timeout)
-        }
+        // IMPORTANT: do NOT call images/pull on the machine here. Pulling into a created
+        // machine prevents `start` from launching the image workload (service mode breaks:
+        // the forwarded port answers "connection reset"). `create` + `start` materializes
+        // and runs the image directly — smolvm pulls on start when the host has network.
+        // The image must therefore be pullable/cached on the host. See SPEC.md §2.4 / §10.
+        logger.info(s"[$name] created on $host; starting machine (image pulled by smolvm on start if needed)")
+        client.start(host, name, timeout)
     }
   }
 
