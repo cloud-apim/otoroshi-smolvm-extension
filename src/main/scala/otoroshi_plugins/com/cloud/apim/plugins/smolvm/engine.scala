@@ -2,7 +2,7 @@ package otoroshi_plugins.com.cloud.apim.plugins.smolvm
 
 import akka.pattern.after
 import akka.stream.Materializer
-import akka.stream.scaladsl.{Sink, Source}
+import akka.stream.scaladsl.Source
 import akka.util.ByteString
 import otoroshi.env.Env
 import play.api.Logger
@@ -13,7 +13,12 @@ import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.Try
 
-/** What the plugin needs from the incoming request, decoupled from the Otoroshi context. */
+/**
+ * What the plugin needs from the incoming request, decoupled from the Otoroshi context.
+ * The body is already buffered (consumed exactly once, in the plugin, and only when
+ * the request actually has a body — consuming the single-subscriber request Source
+ * twice throws "Sink.asPublisher only supports one subscriber").
+ */
 case class SmolInvocation(
     snowflake: String,
     method: String,
@@ -21,7 +26,7 @@ case class SmolInvocation(
     path: String,
     query: Map[String, String],
     headers: Map[String, String],
-    body: Source[ByteString, _]
+    bodyBytes: ByteString
 )
 
 sealed trait InvokeResult
@@ -261,15 +266,13 @@ class SmolVmEngine(env: Env) {
         val fwdHeaders = inv.headers.filterNot {
           case (k, _) => k.equalsIgnoreCase("Host") || k.equalsIgnoreCase("Content-Length") || k.equalsIgnoreCase("Transfer-Encoding")
         }
-        logger.info(s"[$name] service ready in ${System.currentTimeMillis() - rdyStart}ms; proxying ${inv.method} -> $target")
-        inv.body
-          .runFold(ByteString.empty)(_ ++ _)
-          .flatMap { bodyBytes =>
-            client.proxy(target, inv.method, fwdHeaders, bodyBytes, cfg.requestTimeout).map { resp =>
-              logger.info(s"[$name] upstream responded status=${resp.status}; streaming back (VM deleted when stream completes)")
-              val bodyWithCleanup = resp.body.alsoTo(Sink.onComplete(_ => deleteQuietly(host, name)))
-              InvokeResult.Streamed(resp.status, resp.headers, bodyWithCleanup)
-            }
+        logger.info(s"[$name] service ready in ${System.currentTimeMillis() - rdyStart}ms; proxying ${inv.method} -> $target (${inv.bodyBytes.length}b body)")
+        client
+          .proxy(target, inv.method, fwdHeaders, inv.bodyBytes, cfg.requestTimeout)
+          .map { resp =>
+            logger.info(s"[$name] upstream responded status=${resp.status} bytes=${resp.body.length}; returning and tearing down")
+            deleteQuietly(host, name)
+            InvokeResult.Buffered(resp.status, resp.headers, resp.body)
           }
           .recover {
             case e =>
@@ -290,37 +293,35 @@ class SmolVmEngine(env: Env) {
         deleteQuietly(host, name)
         failed(500, "exec_command is required for 'exec' mode")
       case Some(command) =>
-        inv.body
-          .runFold(ByteString.empty)(_ ++ _)
-          .flatMap { bytes =>
-            val b64      = java.util.Base64.getEncoder.encodeToString(bytes.toArray)
-            val envelope = ExecEnvelope.requestJson(inv.method, inv.path, inv.query, inv.headers, b64)
-            val execReq  = ExecRequest(
-              command = command,
-              stdin = Some(Json.stringify(envelope)),
-              env = cfg.env.toSeq,
-              workdir = cfg.workdir,
-              timeoutSecs = Some(cfg.requestTimeout.toSeconds)
-            )
-            logger.info(s"[$name] exec: ${command.mkString(" ")} (stdin ${bytes.size} bytes)")
-            client.exec(host, name, execReq, cfg.requestTimeout).map {
-              case Left(err)                              =>
-                logger.warn(s"[$name] exec call failed: $err")
-                InvokeResult.Failed(502, err)
-              case Right(resp) if !resp.success           =>
-                logger.warn(s"[$name] function exit=${resp.exitCode} stderr='${resp.stderr.take(256)}'")
-                InvokeResult.Failed(502, s"function exited with ${resp.exitCode}: ${resp.stderr.take(512)}")
-              case Right(resp)                            =>
-                logger.info(s"[$name] exec ok exit=0 stdout=${resp.stdout.length}b stderr=${resp.stderr.length}b")
-                ExecEnvelope.parseResponse(resp.stdout) match {
-                  case Left(err) =>
-                    logger.warn(s"[$name] could not parse function response: $err")
-                    InvokeResult.Failed(502, s"$err; stderr=${resp.stderr.take(256)}")
-                  case Right(fr) =>
-                    logger.info(s"[$name] function -> status=${fr.status} bytes=${fr.body.length}")
-                    InvokeResult.Buffered(fr.status, fr.headers, ByteString(fr.body))
-                }
-            }
+        val b64      = java.util.Base64.getEncoder.encodeToString(inv.bodyBytes.toArray)
+        val envelope = ExecEnvelope.requestJson(inv.method, inv.path, inv.query, inv.headers, b64)
+        val execReq  = ExecRequest(
+          command = command,
+          stdin = Some(Json.stringify(envelope)),
+          env = cfg.env.toSeq,
+          workdir = cfg.workdir,
+          timeoutSecs = Some(cfg.requestTimeout.toSeconds)
+        )
+        logger.info(s"[$name] exec: ${command.mkString(" ")} (stdin ${inv.bodyBytes.size} bytes)")
+        client
+          .exec(host, name, execReq, cfg.requestTimeout)
+          .map {
+            case Left(err)                    =>
+              logger.warn(s"[$name] exec call failed: $err")
+              InvokeResult.Failed(502, err)
+            case Right(resp) if !resp.success =>
+              logger.warn(s"[$name] function exit=${resp.exitCode} stderr='${resp.stderr.take(256)}'")
+              InvokeResult.Failed(502, s"function exited with ${resp.exitCode}: ${resp.stderr.take(512)}")
+            case Right(resp)                  =>
+              logger.info(s"[$name] exec ok exit=0 stdout=${resp.stdout.length}b stderr=${resp.stderr.length}b")
+              ExecEnvelope.parseResponse(resp.stdout) match {
+                case Left(err) =>
+                  logger.warn(s"[$name] could not parse function response: $err")
+                  InvokeResult.Failed(502, s"$err; stderr=${resp.stderr.take(256)}")
+                case Right(fr) =>
+                  logger.info(s"[$name] function -> status=${fr.status} bytes=${fr.body.length}")
+                  InvokeResult.Buffered(fr.status, fr.headers, ByteString(fr.body))
+              }
           }
           .andThen { case _ => deleteQuietly(host, name) }
           .recover {
