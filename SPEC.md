@@ -118,11 +118,13 @@ Réponse (`ExecResponse`) : `{ "exitCode": 0, "stdout": "...", "stderr": "..." }
 ### 2.4 Cycle de vie & cold-start (observé en live)
 - Lifecycle : `create → start → exec×N → stop → delete`. Réutiliser une machine est
   recommandé (« une nouvelle machine par commande = lent »).
-- 🔍 **L'image est pull/matérialisée paresseusement à l'`exec`/`run`, pas au
-  `create`/`start`** (vérifié : `start` renvoie `state:running` + `pid` sans réseau ;
-  l'`exec` déclenche le `pull`). ⇒ le `boot_timeout` doit couvrir le pull, qui a lieu
-  au premier exec/proxy. ⇒ **conséquence forte pour le mode `service`** : `create+start`
-  ne lance pas tout seul le workload de l'image ; voir §4.1 et §10.
+- 🔍 **Pull paresseux** (vérifié en live) : `create` ne pull pas ; `start` lance le
+  workload de l'image (et pull à la volée si l'hôte a le réseau) ; en mode `exec` le
+  `pull` est déclenché par l'`exec`. ⇒ `boot_timeout` doit couvrir le pull.
+- 🔴 **Ne JAMAIS appeler `POST /machines/:id/images/pull` entre `create` et `start`** :
+  ça empêche `start` de lancer le workload (mode service : port forwardé → « connection
+  reset »). Vérifié A/B. ⇒ le plugin fait `create → start` (sans pull). L'image doit
+  donc être **pullable/en cache sur l'hôte**.
 - **Aucun snapshot / fast-boot / pooling intégré** → warm pool à notre charge (v2).
 - Endpoints additionnels utiles : `GET /capacity`, `POST /machines/:id/run`
   (image+command en un coup), `POST /machines/:name/resize`, `GET/PUT .../files/*`.
@@ -201,8 +203,10 @@ via `ports:[{host:<auto>,guest:<service_port>}]` + `networkBackend:virtio-net`.
 Otoroshi **reverse-proxifie**. ✅ Validé en réel (whoami, cf. §10).
 
 Flux par requête (v1 éphémère) :
-1. `create` (image + resources + `ports` + virtio-net) → **pré-pull best-effort** →
-   `start` sur l'hôte choisi (le `CMD` de l'image = le serveur, lancé au boot).
+1. `create` (image + resources + `ports` + virtio-net) → `start` sur l'hôte choisi
+   (le `CMD` de l'image = le serveur, lancé au boot ; smolvm pull à la volée au `start`).
+   ⚠️ **Ne PAS** appeler `images/pull` sur la machine entre create et start : ça
+   empêche `start` de lancer le workload (port forwardé → « connection reset »). Vérifié.
 2. **Sonde de readiness** : poll TCP/HTTP sur `http://<host>:<hostPort><readinessPath>`
    jusqu'à succès ou timeout (pattern startup-probe Cloud Run / queue-proxy Knative).
 3. **Proxy** : `env.Ws.url("http://<host>:<hostPort><path>?<query>")` avec méthode,
@@ -353,9 +357,11 @@ examples/{exec-node,service-node}/ ; readme.md, LICENSE, NOTICE
 - ✅ Noms de champs confirmés par le serveur (`memoryMb`, `ports:[{host,guest}]`, …).
 
 Points ouverts :
-1. 🔍 **Pull paresseux** — l'image est matérialisée au premier `exec`/`run` (ou au
-   `start` si déjà en cache). Mitigation : pré-pull best-effort (create→pull→start) ;
-   recommander de **pré-puller les images sur les hôtes**. `boot_timeout` couvre le pull.
+1. 🔴 **Pull paresseux + pull casse l'auto-run** (vérifié) — `images/pull` sur une
+   machine créée empêche `start` de lancer le workload. Le plugin fait donc `create →
+   start` (sans pull). ⇒ l'image doit être **pullable depuis l'hôte** (réseau au `start`)
+   ou **déjà en cache**. Pour des hôtes sans réseau, pré-cacher les images hors-bande
+   (CLI `smolvm`). `boot_timeout` couvre le pull-on-start.
 2. ⚠️ **Pas d'env au niveau machine** → en mode `service`, les variables d'env doivent
    être **bakées dans l'image** (l'API create n'a ni `env` ni `cmd`). L'env du config
    ne s'applique qu'au mode `exec`.
