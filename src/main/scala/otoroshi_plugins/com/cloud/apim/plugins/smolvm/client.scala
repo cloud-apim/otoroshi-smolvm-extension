@@ -1,6 +1,5 @@
 package otoroshi_plugins.com.cloud.apim.plugins.smolvm
 
-import akka.stream.scaladsl.Source
 import akka.util.ByteString
 import otoroshi.env.Env
 import play.api.Logger
@@ -11,8 +10,8 @@ import play.api.libs.ws.WSResponse
 import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.{ExecutionContext, Future}
 
-/** Headers + status + streamed body returned by a `service`-mode proxy call. */
-case class SmolProxyResponse(status: Int, headers: Map[String, String], body: Source[ByteString, _])
+/** Status + headers + fully-buffered body returned by a `service`-mode proxy call. */
+case class SmolProxyResponse(status: Int, headers: Map[String, String], body: ByteString)
 
 /**
  * Stateless HTTP wrapper over the smolvm local API (`/api/v1`). One instance is reused
@@ -122,19 +121,18 @@ class SmolVmClient(env: Env) {
       implicit ec: ExecutionContext
   ): Future[SmolProxyResponse] = {
     logger.debug(s"PROXY $method $url (${body.length}b body)")
-    // body is buffered into an in-memory ByteString (re-subscribable). Passing the raw
-    // single-subscriber request Source to .withBody(...).stream() throws
-    // "Sink.asPublisher(fanout = false) only supports one subscriber".
+    // Buffered request AND response (.execute()) to avoid any single-subscriber Source
+    // publisher issues. v1: fine for function-sized payloads; streaming can come later.
     env.Ws
       .url(url)
       .withRequestTimeout(timeout)
       .withMethod(method)
       .withHttpHeaders(headers.toSeq: _*)
       .withBody(body)
-      .stream()
+      .execute()
       .map { resp =>
-        logger.debug(s"smolvm proxy $method $url -> HTTP ${resp.status}")
-        SmolProxyResponse(resp.status, resp.headers.mapValues(_.last).toMap, resp.bodyAsSource)
+        logger.debug(s"smolvm proxy $method $url -> HTTP ${resp.status} (${resp.bodyAsBytes.length}b)")
+        SmolProxyResponse(resp.status, resp.headers.mapValues(_.last).toMap, resp.bodyAsBytes)
       }
   }
 }
