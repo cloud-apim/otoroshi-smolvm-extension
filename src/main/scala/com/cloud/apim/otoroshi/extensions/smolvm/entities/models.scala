@@ -23,6 +23,7 @@ case class SmolPort(host: Int, guest: Int) {
 case class SmolMachineSpec(
     name: String,
     image: String,
+    from: Option[String] = None, // alternative to image: a pre-packed `.smolmachine` bundle on the host
     cpus: Option[Int] = None,
     memoryMb: Option[Int] = None,
     storageGb: Option[Int] = None,
@@ -35,7 +36,9 @@ case class SmolMachineSpec(
     ports: Seq[SmolPort] = Seq.empty
 ) {
   def json: JsValue = {
-    var o = Json.obj("name" -> name, "image" -> image, "network" -> network, "gpu" -> gpu)
+    var o = Json.obj("name" -> name, "network" -> network, "gpu" -> gpu)
+    if (image.nonEmpty) o = o ++ Json.obj("image" -> image)
+    from.foreach(v => o = o ++ Json.obj("from" -> v))
     cpus.foreach(v => o = o ++ Json.obj("cpus" -> v))
     memoryMb.foreach(v => o = o ++ Json.obj("memoryMb" -> v))
     storageGb.foreach(v => o = o ++ Json.obj("storageGb" -> v))

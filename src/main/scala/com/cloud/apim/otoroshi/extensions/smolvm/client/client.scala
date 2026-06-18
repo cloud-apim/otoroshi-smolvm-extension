@@ -107,6 +107,21 @@ class SmolVmClient(env: Env) {
       .map(okUnit("pull image"))
       .recover { case e => Left(s"pull image failed: ${e.getMessage}") }
 
+  /** Upload a file into a machine (PUT /machines/:name/files then path). Used by the node runtime. */
+  def putFile(host: String, name: String, path: String, bytes: ByteString, timeout: FiniteDuration)(implicit
+      ec: ExecutionContext
+  ): Future[Either[String, Unit]] = {
+    val p = if (path.startsWith("/")) path else s"/$path"
+    env.Ws
+      .url(api(host, s"/machines/$name/files$p"))
+      .withRequestTimeout(timeout)
+      .withMethod("PUT")
+      .withBody(bytes)
+      .execute()
+      .map(okUnit("put file"))
+      .recover { case e => Left(s"put file failed: ${e.getMessage}") }
+  }
+
   /** Probe a forwarded service port: any HTTP answer means the server is listening. */
   def probe(serviceUrl: String, timeout: FiniteDuration)(implicit ec: ExecutionContext): Future[Boolean] =
     env.Ws

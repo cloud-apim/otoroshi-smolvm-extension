@@ -43,3 +43,22 @@ docker build -t smolvm-service-node:latest .
    your smolvm host(s) and `image` to your pushed image.
 4. Call the route — a micro-VM is booted per request, runs the function, returns the
    response, and is torn down (v1 ephemeral).
+
+---
+
+## v2 — persistent machines (`SmolMachine` entity)
+
+These use the admin extension + the `SmolMachineBackend` plugin (config = only a `ref` to a
+`SmolMachine`). Enable the extension first (`CLOUD_APIM_EXTENSIONS_SMOLMACHINE_ENABLED=true`,
+optionally `CLOUD_APIM_EXTENSIONS_SMOLMACHINE_STATE_URI=redis://…`).
+
+- [`smolmachine-node/`](./smolmachine-node) — `runtime: node`: a pool of kept-alive
+  `node:22-alpine` machines exposing the node RPC protocol (`/run`, `/npm/install`, `/npx`,
+  `/run-file`, …).
+- [`smolmachine-service-via-exec/`](./smolmachine-service-via-exec) — `mode: service-via-exec`:
+  a kept-alive machine whose HTTP server is **launched by an `exec`** (`launch_command`) and
+  then reverse-proxied.
+
+Each ships a `Dockerfile` (PID 1 kept alive with `sleep infinity`), a `smolmachine.json`
+(the entity to create via the back-office **SmolVM Machines** page or the admin API) and a
+`route.json` (the plugin block).

@@ -43,7 +43,7 @@ case class SmolVmFunctionConfig(
     execCommand: Option[Seq[String]] = None,
     requestTimeout: FiniteDuration = 30.seconds,
     bootTimeout: FiniteDuration = 60.seconds,
-    isolation: String = "ephemeral"                 // "ephemeral" | "reuse" (v1: ephemeral only)
+    isolation: String = "ephemeral"                 // "ephemeral"
 ) extends NgPluginConfig {
   def json: JsValue = SmolVmFunctionConfig.format.writes(this)
 }
@@ -176,7 +176,6 @@ object SmolVmFunctionConfig {
       "isolation"         -> Json.obj("type" -> "select", "label" -> "Isolation", "props" -> Json.obj(
         "options" -> Json.arr(
           Json.obj("value" -> "ephemeral", "label" -> "ephemeral (VM per request)"),
-          Json.obj("value" -> "reuse", "label" -> "reuse (warm, v2)")
         )
       ))
     )
@@ -211,7 +210,7 @@ class SmolVmFunctionBackend extends NgBackendCall {
   override def multiInstance: Boolean                      = true
   override def core: Boolean                               = false
   override def useDelegates: Boolean                       = false
-  override def name: String                                = "Cloud APIM - smolvm FaaS (ephemeral)"
+  override def name: String                                = "Cloud APIM - smolvm ephemeral"
   override def description: Option[String]                 =
     "Run a function in a smolvm micro-VM (HTTP-service proxy or stdin/stdout exec) and return its response".some
   override def defaultConfigObject: Option[NgPluginConfig] = SmolVmFunctionConfig.default.some
@@ -222,7 +221,7 @@ class SmolVmFunctionBackend extends NgBackendCall {
   override def start(env: Env): Future[Unit] = {
     logger.info("[smolvm] plugin loading: instantiating SmolVmEngine singleton")
     SmolVmFunctionBackend.engine(env)
-    env.logger.info("[Cloud APIM] the 'smolvm FaaS' plugin is available!")
+    env.logger.info("[Cloud APIM] the 'smolvm ephemeral' plugin is available!")
     logger.info("[smolvm] plugin ready (logger name: 'cloud-apim-smolvm' — set it to DEBUG for HTTP-level traces)")
     Future.successful(())
   }
