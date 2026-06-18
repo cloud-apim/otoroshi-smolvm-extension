@@ -1,6 +1,6 @@
 {
   "_comment": "Drop into an Otoroshi route's 'plugins' array. Requests are reverse-proxied to the node HTTP server that the plugin started via exec inside the kept-alive micro-VM.",
-  "plugin": "cp:otoroshi_plugins.com.cloud.apim.plugins.smolvm.SmolMachineBackend",
+  "plugin": "cp:otoroshi_plugins.com.cloud.apim.otoroshi.extensions.smolvm.plugins.SmolMachineBackend",
   "enabled": true,
   "config": {
     "ref": "smol-machine_svc_exec"
