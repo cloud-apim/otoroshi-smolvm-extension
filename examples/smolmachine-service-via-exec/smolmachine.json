@@ -1,0 +1,25 @@
+{
+  "_comment": "service-via-exec: a kept-alive micro-VM whose HTTP server is started by an exec (launch_command), then reverse-proxied. Create via the back-office or POST to /apis/smolvm.extensions.cloud-apim.com/v1/smol-machines.",
+  "id": "smol-machine_svc_exec",
+  "name": "node service via exec",
+  "description": "Kept-alive node machine; the HTTP server is launched via exec then proxied",
+  "enabled": true,
+  "tags": [],
+  "metadata": {},
+  "spec": {
+    "image": "smolvm-svc-exec-node:latest",
+    "instances": 2,
+    "mode": "service-via-exec",
+    "runtime": "node",
+    "network": true,
+    "hosts": ["http://127.0.0.1:8080"],
+    "service_port": 8080,
+    "readiness_path": "/health",
+    "readiness_timeout": 15000,
+    "launch_command": ["node", "/app/server.js"],
+    "cpus": 2,
+    "memory_mb": 512,
+    "boot_timeout": 120000,
+    "idle_timeout": 600000
+  }
+}
