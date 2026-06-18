@@ -152,7 +152,9 @@ When `code` is set it becomes the workload:
   ideal for one-shot / untrusted code.
 
 Placement (which VM lives on which host) is kept in shared state, so a pool behaves consistently
-across an Otoroshi cluster.
+across an Otoroshi cluster. A background reconciler (leader-only) periodically compares the store
+with the real state of the smolvm hosts: it recycles idle VMs, drops registry entries whose VM has
+vanished (host restart, crash), and deletes orphan VMs (alive but unknown to the store).
 
 ## Workflows
 
