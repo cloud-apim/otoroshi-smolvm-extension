@@ -32,12 +32,15 @@ class EntitiesSpec extends munit.FunSuite {
     assertEquals((spec.json \ "mode").as[String], "service-via-exec")
   }
 
-  test("SmolMachineSpec clamps instances to >= 1 and validates mode/runtime") {
-    val j = Json.obj("image" -> "alpine", "instances" -> 0, "mode" -> "bogus", "runtime" -> "weird")
-    val s = SmolMachineSpec.format.reads(j).get
-    assertEquals(s.instances, 1)
-    assertEquals(s.mode, "service")
-    assertEquals(s.runtime, "none")
+  test("SmolMachineSpec allows instances=0 (ephemeral), clamps negatives to 0, validates mode/runtime") {
+    val s0 = SmolMachineSpec.format.reads(Json.obj("image" -> "alpine", "instances" -> 0, "mode" -> "bogus", "runtime" -> "weird")).get
+    assertEquals(s0.instances, 0)
+    assertEquals(s0.mode, "service")
+    assertEquals(s0.runtime, "none")
+    val sNeg = SmolMachineSpec.format.reads(Json.obj("image" -> "alpine", "instances" -> -5)).get
+    assertEquals(sNeg.instances, 0)
+    val sDefault = SmolMachineSpec.format.reads(Json.obj("image" -> "alpine")).get
+    assertEquals(sDefault.instances, 1)
   }
 
   test("SmolMachineSpec drops blank launch_command / exec_command entries") {
