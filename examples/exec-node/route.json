@@ -1,6 +1,6 @@
 {
   "_comment": "Drop this object into an Otoroshi route's 'plugins' array. The backend call is fully replaced by the smolvm function.",
-  "plugin": "cp:otoroshi_plugins.com.cloud.apim.plugins.smolvm.SmolVmFunctionBackend",
+  "plugin": "cp:otoroshi_plugins.com.cloud.apim.otoroshi.extensions.smolvm.plugins.SmolVmFunctionBackend",
   "enabled": true,
   "config": {
     "mode": "exec",
