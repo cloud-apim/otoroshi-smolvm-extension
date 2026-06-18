@@ -87,6 +87,9 @@ of an **admin extension**. The v1 plugin above is unchanged and keeps working as
   across requests, and idle ones reaped (leader-only). The placement (`instance → host`)
   lives in an **external Redis** reached through otoroshi's StatefulClient, so it is
   **cluster-safe**.
+- **Ephemeral mode**: set `instances: 0` for a fresh micro-VM created per request and torn
+  down after (the v1 behaviour, but driven by the entity). No pool, no registry, no reaper —
+  maximum isolation (great for one-shot node code execution).
 - **New plugin `SmolMachineBackend`** — config is **only a reference** to a `SmolMachine`
   (`cp:otoroshi_plugins.com.cloud.apim.plugins.smolvm.SmolMachineBackend`).
 
