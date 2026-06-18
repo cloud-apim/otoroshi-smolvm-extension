@@ -1,0 +1,22 @@
+{
+  "_comment": "POST this to the admin API: /apis/smolvm.extensions.cloud-apim.com/v1/smol-machines (or create it from the back-office 'SmolVM Machines' page). A pool of `instances` node:22-alpine micro-VMs is created lazily on first request and reused; idle ones are reaped after `idle_timeout`.",
+  "id": "smol-machine_node",
+  "name": "node runtime",
+  "description": "A pool of live node:22-alpine machines exposing the node RPC protocol",
+  "enabled": true,
+  "tags": [],
+  "metadata": {},
+  "spec": {
+    "image": "smolvm-node-keepalive:latest",
+    "instances": 2,
+    "mode": "exec",
+    "runtime": "node",
+    "network": true,
+    "hosts": ["http://127.0.0.1:8080"],
+    "cpus": 2,
+    "memory_mb": 512,
+    "request_timeout": 60000,
+    "boot_timeout": 120000,
+    "idle_timeout": 600000
+  }
+}

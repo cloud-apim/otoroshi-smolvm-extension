@@ -1,0 +1,8 @@
+{
+  "_comment": "Drop this object into an Otoroshi route's 'plugins' array. The backend call is routed to a pooled smolvm node machine referenced by the SmolMachine entity. The route's path/method select the node operation (see README).",
+  "plugin": "cp:otoroshi_plugins.com.cloud.apim.plugins.smolvm.SmolMachineBackend",
+  "enabled": true,
+  "config": {
+    "ref": "smol-machine_node"
+  }
+}
