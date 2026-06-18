@@ -57,7 +57,8 @@ case class ExecRequest(
     stdin: Option[String] = None,
     env: Seq[(String, String)] = Seq.empty,
     workdir: Option[String] = None,
-    timeoutSecs: Option[Long] = None
+    timeoutSecs: Option[Long] = None,
+    background: Boolean = false // smolvm native: spawn detached, return immediately; runs until it exits or the machine stops
 ) {
   def json: JsValue = {
     var o = Json.obj("command" -> command)
@@ -66,6 +67,7 @@ case class ExecRequest(
       o = o ++ Json.obj("env" -> JsArray(env.map { case (k, v) => Json.obj("name" -> k, "value" -> v) }))
     workdir.foreach(v => o = o ++ Json.obj("workdir" -> v))
     timeoutSecs.foreach(v => o = o ++ Json.obj("timeoutSecs" -> v))
+    if (background) o = o ++ Json.obj("background" -> true)
     o
   }
 }
