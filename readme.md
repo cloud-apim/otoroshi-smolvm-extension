@@ -1,43 +1,44 @@
 # Otoroshi smolvm extension
 
-An [Otoroshi](https://github.com/MAIF/otoroshi) plugin that turns a route into a
-**FaaS endpoint backed by [smolvm](https://smolmachines.com/) micro-VMs**.
+Run **code, functions and HTTP services inside [smolvm](https://smolmachines.com/) micro-VMs**,
+straight from [Otoroshi](https://github.com/MAIF/otoroshi).
 
-On each request, the plugin picks a smolvm host (round-robin over a static list or a
-list fetched from a URL), provisions a micro-VM from the function's configuration,
-runs the function, and returns the response — then tears the VM down.
+You describe a workload as a **`SmolMachine`** (an Otoroshi entity), point a route at it, and
+Otoroshi provisions micro-VMs on your smolvm hosts and routes traffic to them — with strong
+per-workload isolation.
 
-> Status: **v1** — self-hosted smolvm only, *ephemeral VM per request* (no warm pool yet).
-> API mapping validated against **smolvm 1.0.4** (`smolvm serve openapi`); `service` mode
-> verified end-to-end against a running host. See [`SPEC.md`](./SPEC.md) for design, the
-> validation notes, and the roadmap.
+## What you can do
 
-## Two execution contracts
+- **Expose an HTTP service** running inside a micro-VM and reverse-proxy to it.
+- **Run one-shot functions** (request in → response out), OpenFaaS-style.
+- **Run Node.js** without building an image: execute JS / `npm` / `npx` on demand, or run
+  **inline JavaScript defined right on the entity** (with optional npm dependencies).
+- **Pick your isolation/perf trade-off**: a warm pool of reused VMs, or a brand-new VM per
+  request (maximum isolation, great for running untrusted code).
+- **Run in a cluster**: machine placement is shared across all Otoroshi nodes.
 
-| Mode | How it works | Best for |
-|---|---|---|
-| `service` | Your OCI image runs an HTTP server on `service_port`; Otoroshi reverse-proxies to the forwarded port. Streaming, binary, native HTTP status. | services / streaming / perf |
-| `exec` | The HTTP request is serialized to JSON on **stdin** of your `exec_command`; the function writes a JSON response on **stdout**. (OpenFaaS classic-watchdog style.) | simple one-shot functions |
+## How it works
 
-### `exec` request / response envelope
+1. You create a **`SmolMachine`** entity — in the back-office under **SmolVM Machines**, or via
+   the admin API. It describes the workload: image, resources, execution mode, runtime, how many
+   instances, which smolvm hosts, timeouts…
+2. You add the **Smol Machine** plugin to a route. Its only setting is a **reference** to a
+   `SmolMachine`; everything else lives on the entity.
+3. On a request, Otoroshi provisions (or reuses) a micro-VM for that machine on one of its smolvm
+   hosts, runs the workload, and returns the response.
 
-stdin (request):
-```json
-{ "method": "POST", "path": "/x", "query": {"a": "b"},
-  "headers": {"content-type": "application/json"},
-  "body_base64": "..." }
 ```
-stdout (response):
-```json
-{ "status": 200, "headers": {"content-type": "application/json"},
-  "body_base64": "..." }
+   client ──▶ Otoroshi route ──▶ Smol Machine plugin ──▶ SmolMachine entity
+                                                              │
+                                                              ▼
+                                                    smolvm host(s) ── micro-VM(s)
 ```
-`body` (plain string) is accepted instead of `body_base64`.
 
 ## Requirements
 
-- An Otoroshi instance (the plugin is built `provided` against Otoroshi).
-- One or more reachable smolvm servers: `smolvm serve start --listen 0.0.0.0:8080`.
+- An Otoroshi instance.
+- One or more reachable **smolvm** servers: `smolvm serve start --listen 0.0.0.0:8080`.
+- (Optional, recommended for clusters) a Redis for shared machine placement.
 
 ## Install
 
@@ -48,90 +49,149 @@ sbt package
 # target/scala-2.12/otoroshi-smolvm-extension_2.12-<version>.jar
 ```
 
-Then add the plugin to a route (plugin ref
-`cp:otoroshi_plugins.com.cloud.apim.otoroshi.extensions.smolvm.plugins.SmolVmFunctionBackend`).
+Enable the extension (config file or environment):
 
-## Configuration
-
-| Field | Type | Default | Maps to |
-|---|---|---|---|
-| `mode` | `service` \| `exec` | `service` | execution contract |
-| `hosts` | `[string]` | `[]` | static smolvm hosts (`http://h:8080`) |
-| `hosts_url` | string | – | URL returning a JSON array of hosts |
-| `image` | string | – | smolvm `image` |
-| `network_enabled` | bool | `false` | `network` (outbound egress on/off) |
-| `allow_cidrs` | `[string]` | `[]` | `allowedCidrs` (egress by CIDR; smolvm has no host-based egress) |
-| `cpus` / `memory_mb` | int | `2` / `512` | `cpus` / `memoryMb` |
-| `env` | object | `{}` | exec mode only → exec `env:[{name,value}]` (no machine-level env) |
-| `volumes` / `ports` | `[string]` | `[]` | `mounts:[{source,target}]` / `ports:[{host,guest}]` |
-| `service_port` | int | `8080` | (service) guest port forwarded |
-| `readiness_path` | string | `/` | (service) readiness probe path |
-| `exec_command` | `[string]` | – | (exec) command reading stdin |
-| `request_timeout` / `boot_timeout` | duration | `30s` / `60s` | timeouts |
-| `isolation` | `ephemeral` \| `reuse` | `ephemeral` | v1 honors `ephemeral` only |
-
-See [`SPEC.md`](./SPEC.md) for the complete reference.
-
----
-
-## v2 — persistent machines (`SmolMachine` entity + admin extension)
-
-v2 adds **non-ephemeral, pooled machines** managed as a first-class Otoroshi entity, on top
-of an **admin extension**. The v1 plugin above is unchanged and keeps working as-is.
-
-- **Entity `SmolMachine`** (group `smolvm.extensions.cloud-apim.com`, plural `smol-machines`)
-  carries a `SmolMachineSpec`: image, resources, network, **`instances` (1..n)**, execution
-  **`mode`**, **`runtime`**, the machine's own smolvm **hosts**, readiness, timeouts and
-  `idle_timeout`. Managed via the admin API and the back-office **SmolVM Machines** page.
-- **Lazy pool**: instances are created on the first request (up to `instances`), reused
-  across requests, and idle ones reaped (leader-only). The placement (`instance → host`)
-  lives in an **external Redis** reached through otoroshi's StatefulClient, so it is
-  **cluster-safe**.
-- **Ephemeral mode**: set `instances: 0` for a fresh micro-VM created per request and torn
-  down after (the v1 behaviour, but driven by the entity). No pool, no registry, no reaper —
-  maximum isolation (great for one-shot node code execution).
-- **New plugin `SmolMachineBackend`** — config is **only a reference** to a `SmolMachine`
-  (`cp:otoroshi_plugins.com.cloud.apim.otoroshi.extensions.smolvm.plugins.SmolMachineBackend`).
-
-### Execution modes (v2)
-
-| Mode | How it works |
-|---|---|
-| `service` | image runs the HTTP server; proxied (now persistent, reused) |
-| `exec` | stdin JSON → stdout JSON per request (classic watchdog), on a reused machine |
-| `service-via-exec` | generic kept-alive image; the plugin **launches the HTTP server with an `exec`** (`launch_command`), waits readiness, then proxies |
-
-### Node runtime (`runtime: node`)
-
-A kept-alive `node:22-alpine` machine exposing the `smolvm-sdk` node preset over HTTP →
-`exec`: `POST /run` (`node -e`), `/eval`, `/run-file`, `/npm`, `/npm/install`, `/npx`,
-`GET /version`, `PUT /files/<path>`. Combine with `mode: service-via-exec` to run a node
-HTTP app as a proxied service. See [`examples/smolmachine-node`](./examples/smolmachine-node)
-and [`examples/smolmachine-service-via-exec`](./examples/smolmachine-service-via-exec).
-
-**Inline code**: instead of the per-request RPC, you can bake the JS on the entity. Set
-`spec.code` (and optionally `spec.dependencies` for an `npm install` at provisioning, and
-`spec.code_file`, default `/app/index.js`). When `code` is set it **overrides the command**:
-- `mode: exec` → each request runs `node <code_file>` with the request envelope on stdin
-  (stdin JSON → stdout JSON contract); the RPC endpoints are disabled.
-- `mode: service-via-exec` → the code IS the HTTP server (`node <code_file>` is launched),
-  then proxied.
-
-> The micro-VM must stay alive to be `exec`-able. smolvm has no `cmd` at machine creation,
-> so the **image's CMD must keep PID 1 alive** (e.g. `CMD ["sleep","infinity"]`); the node
-> examples ship such an image.
-
-### Enable it
-
-```hocon
-# otoroshi config (or env)
+```bash
 CLOUD_APIM_EXTENSIONS_SMOLMACHINE_ENABLED=true
-CLOUD_APIM_EXTENSIONS_SMOLMACHINE_STATE_URI=redis://127.0.0.1:6379/0   # optional; falls back to otoroshi's datastore redis
+# optional: a dedicated Redis for cluster-wide machine placement
+# (falls back to Otoroshi's own datastore when unset)
+CLOUD_APIM_EXTENSIONS_SMOLMACHINE_STATE_URI=redis://127.0.0.1:6379/0
 ```
 
-The admin extension is auto-discovered on the classpath (same jar). Security: the node
-runtime executes arbitrary code by design — protect routes with auth and bound egress with
-`spec.allow_cidrs`.
+## Create a machine
+
+From the back-office **SmolVM Machines** page, or via the admin API:
+
+```bash
+curl -X POST 'https://otoroshi-api/apis/smolvm.extensions.cloud-apim.com/v1/smol-machines' \
+  -u <api-key>:<secret> -H 'content-type: application/json' -d '{
+    "id": "smol-machine_whoami",
+    "name": "whoami",
+    "spec": {
+      "image": "traefik/whoami:latest",
+      "mode": "service",
+      "instances": 2,
+      "network": true,
+      "hosts": ["http://127.0.0.1:8080"],
+      "service_port": 80
+    }
+  }'
+```
+
+Then add the plugin to a route's `plugins` array:
+
+```json
+{
+  "plugin": "cp:otoroshi_plugins.com.cloud.apim.otoroshi.extensions.smolvm.plugins.SmolMachineBackend",
+  "enabled": true,
+  "config": { "ref": "smol-machine_whoami" }
+}
+```
+
+## Execution modes
+
+| Mode | What runs | When to use |
+|---|---|---|
+| `service` | The image's own HTTP server is started at boot; Otoroshi reverse-proxies to it. | Container images that already run a server (streaming, binary, native HTTP). |
+| `exec` | Each request is serialized to JSON on **stdin** of your command; the command writes a JSON response on **stdout**. | Simple functions / handlers. |
+| `service-via-exec` | A generic image is kept alive; the plugin **starts your HTTP server with a command**, waits for it, then proxies. | Run a server from a base image (e.g. Node) without baking a custom image. |
+
+`exec` envelope — stdin (request): `{"method","path","query","headers","body_base64"}` ·
+stdout (response): `{"status","headers","body_base64"}` (or `"body"` for plain text).
+
+## Node.js runtime
+
+Set `runtime: node` to use a `node:22-alpine` machine.
+
+**On-demand (RPC).** The request path selects the operation:
+
+```bash
+curl -X POST https://route/run         -d '{"code":"console.log(40+2)"}'   # node -e  -> {"exitCode":0,"stdout":"42\n"}
+curl -X POST https://route/eval        -d '{"expression":"1+2+3"}'
+curl -X POST https://route/run-file    -d '{"path":"/app/x.js"}'
+curl -X POST https://route/npm/install -d '{"packages":["lodash"]}'
+curl -X POST https://route/npx         -d '{"args":["cowsay","hi"]}'
+curl -X PUT  https://route/files/app.js --data-binary @app.js
+curl        https://route/version
+```
+
+**Inline code.** Bake the JavaScript on the entity instead of passing it per request — set
+`code` (and optionally `dependencies` to `npm install`, and `code_file`, default `/app/index.js`).
+When `code` is set it becomes the workload:
+
+- with `mode: exec` → each request runs your script with the request envelope on stdin;
+- with `mode: service-via-exec` → your script **is** the HTTP server, and gets proxied.
+
+```json
+{
+  "name": "node app",
+  "spec": {
+    "image": "node:22-alpine",
+    "runtime": "node",
+    "mode": "service-via-exec",
+    "instances": 2,
+    "network": true,
+    "hosts": ["http://127.0.0.1:8080"],
+    "service_port": 3000,
+    "dependencies": ["express"],
+    "code": "const e=require('express')();e.get('/',(_,r)=>r.send('hi'));e.listen(3000,'0.0.0.0')",
+    "launch_command": ["node", "/app/index.js"]
+  }
+}
+```
+
+## Instances & scaling
+
+`spec.instances` controls how a machine is run:
+
+- **`n` ≥ 1** — a **warm pool** of `n` micro-VMs, created lazily on first use, reused across
+  requests, and load-balanced. Idle VMs are recycled automatically (`idle_timeout`).
+- **`0`** — **ephemeral**: a fresh micro-VM per request, torn down right after. Maximum isolation,
+  ideal for one-shot / untrusted code.
+
+Placement (which VM lives on which host) is kept in shared state, so a pool behaves consistently
+across an Otoroshi cluster.
+
+## Configuration reference (`spec`)
+
+Durations are in **milliseconds**.
+
+| Field | Default | Description |
+|---|---|---|
+| `image` | – | OCI image to run (must be pullable by the smolvm host). |
+| `from` | – | Alternative to `image`: a pre-packed `.smolmachine` bundle on the host. |
+| `instances` | `1` | `0` = ephemeral (VM per request); `n` = warm pool size. |
+| `mode` | `service` | `service` · `exec` · `service-via-exec`. |
+| `runtime` | `none` | `none` · `node`. |
+| `hosts` | `[]` | smolvm hosts for this machine (`http://host:8080`). |
+| `hosts_url` | – | URL returning a JSON array of hosts. |
+| `network` | `false` | Allow outbound network from the VM. |
+| `allow_cidrs` | `[]` | Restrict egress to these CIDRs. |
+| `cpus` / `memory_mb` | `2` / `512` | VM resources. |
+| `storage_gb` / `overlay_gb` / `gpu` | – | Extra VM resources. |
+| `mounts` / `ports` | `[]` | Host mounts `{source,target,readonly}` / port maps `{host,guest}`. |
+| `service_port` | `8080` | (service) guest port to forward & proxy. |
+| `readiness_path` / `readiness_timeout` | `/` / `10000` | (service) readiness probe. |
+| `launch_command` | – | (service-via-exec) command that starts the server. |
+| `exec_command` | – | (exec) command that reads stdin / writes stdout. |
+| `code` / `code_file` / `dependencies` | – / `/app/index.js` / `[]` | (node) inline JS, where to write it, npm packages. |
+| `env` / `workdir` | `{}` / – | Environment variables / working directory for commands. |
+| `boot_timeout` / `request_timeout` | `60000` / `30000` | Provisioning / invocation timeouts. |
+| `idle_timeout` | `300000` | Pooled VMs idle longer than this are recycled. |
+
+## Examples
+
+See [`examples/`](./examples):
+
+- `smolmachine-node` — Node runtime (on-demand RPC).
+- `smolmachine-node-inline` — inline JS on the entity, with an npm dependency.
+- `smolmachine-service-via-exec` — start an HTTP server with a command, then proxy.
+
+## Security
+
+Running arbitrary code or `npm install` is powerful by design — it executes inside an isolated
+micro-VM. Protect your routes with Otoroshi authentication (API key / JWT) and bound outbound
+access with `allow_cidrs`.
 
 ## License
 
