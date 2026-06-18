@@ -29,7 +29,7 @@
           type: 'select',
           props: {
             label: 'Execution mode',
-            options: [
+            possibleValues: [
               { value: 'service', label: 'service (HTTP server in image, proxied)' },
               { value: 'exec', label: 'exec (stdin JSON -> stdout JSON)' },
               { value: 'service-via-exec', label: 'service-via-exec (exec launches the HTTP server)' },
@@ -40,7 +40,7 @@
           type: 'select',
           props: {
             label: 'Runtime',
-            options: [
+            possibleValues: [
               { value: 'none', label: 'none' },
               { value: 'node', label: 'node (node:22-alpine RPC: run / npm / npx)' },
             ],
