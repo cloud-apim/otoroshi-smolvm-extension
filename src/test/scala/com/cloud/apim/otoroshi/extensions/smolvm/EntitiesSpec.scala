@@ -43,6 +43,17 @@ class EntitiesSpec extends munit.FunSuite {
     assertEquals(sDefault.instances, 1)
   }
 
+  test("runtime accepts node and bun, rejects unknown; bun command mapping") {
+    assertEquals(SmolMachineSpec.format.reads(Json.obj("image" -> "oven/bun:latest", "runtime" -> "bun")).get.runtime, "bun")
+    assertEquals(SmolMachineSpec.format.reads(Json.obj("image" -> "x", "runtime" -> "deno")).get.runtime, "none")
+    val bun = com.cloud.apim.otoroshi.extensions.smolvm.runtime.JsRuntimeCommands.forRuntime("bun").get
+    assertEquals(bun.bin, "bun")
+    assertEquals(bun.eval, Seq("bun", "-e"))
+    assertEquals(bun.install, Seq("bun", "add"))
+    assertEquals(bun.npx, "bunx")
+    assert(com.cloud.apim.otoroshi.extensions.smolvm.runtime.JsRuntimeCommands.forRuntime("none").isEmpty)
+  }
+
   test("SmolMachineSpec round-trips node inline code + dependencies") {
     val spec = SmolMachineSpec(
       image = "node:22-alpine",
