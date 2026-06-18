@@ -65,6 +65,9 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
   private val portBase  = 20000
   private val portRange = 20000
   private val lockTtlMs  = 60000L
+  // service-via-exec keeps the launching exec connection open for the server's lifetime (until the VM is
+  // deleted/reaped). play-ws caps a request timeout at Int.MaxValue ms (~24.8 days), so use just under that.
+  private val serverExecTimeout = 2000000000.millis
 
   // local counters for the ephemeral path (instances = 0): no external state needed
   private val ephemeralHostCounter = new AtomicInteger(0)
@@ -371,12 +374,15 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
     def launchAndReady(): Future[Either[String, InstanceRecord]] = {
     val launchF: Future[Either[String, Boolean]] = (spec.mode, effectiveCommand(spec, spec.launchCommand)) match {
       case ("service-via-exec", Some(cmd)) if cmd.nonEmpty =>
-        val sh = s"nohup ${cmd.mkString(" ")} > /tmp/smolvm-server.log 2>&1 &"
-        logger.info(s"[$name] launching server via exec: $sh")
-        client.exec(host, name, ExecRequest(Seq("sh", "-c", sh), None, spec.env.toSeq, spec.workdir, Some(15L)), 30.seconds).map {
-          case Left(err) => Left(s"launch_command failed: $err")
-          case Right(_)  => Right(true)
-        }
+        // Run the server in the FOREGROUND of an exec connection we keep open (fire-and-forget):
+        // a backgrounded process (`nohup`/`setsid` + `&`) gets reaped when smolvm closes the exec.
+        // The server lives as long as this connection is open; it dies when the VM is deleted/reaped.
+        // `timeoutSecs = None` => no guest-side time limit; a very long HTTP timeout keeps it open.
+        val sh = s"exec ${cmd.mkString(" ")} > /tmp/smolvm-server.log 2>&1"
+        logger.info(s"[$name] launching server (foreground, kept-open exec): ${cmd.mkString(" ")}")
+        client.exec(host, name, ExecRequest(Seq("sh", "-c", sh), None, spec.env.toSeq, spec.workdir, None), serverExecTimeout)
+          .onComplete(res => logger.info(s"[$name] server exec connection ended: $res"))
+        Future.successful(Right(true))
       case ("service-via-exec", _)                          =>
         Future.successful(Left("mode 'service-via-exec' requires a non-empty launch_command (or spec.code)"))
       case _                                                =>
@@ -395,9 +401,13 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
           logger.info(s"[$name] waiting readiness at $readyUrl (timeout ${spec.readinessTimeout})")
           waitReady(readyUrl, deadline).flatMap {
             case false =>
-              logger.warn(s"[$name] not ready after ${spec.readinessTimeout} — tearing down")
-              client.delete(host, name, 15.seconds)
-              Future.successful(Left(s"instance did not become ready within ${spec.readinessTimeout}"))
+              // pull the server log to explain WHY it never came up (crash, wrong port, missing dep, ...)
+              serverLogTail(host, name).map { log =>
+                val hint = if (log.trim.nonEmpty) s" — server log:\n$log" else " — server log empty (process likely never started / was killed; use a keep-alive image and check the launch command)"
+                logger.warn(s"[$name] not ready after ${spec.readinessTimeout}$hint — tearing down")
+                client.delete(host, name, 15.seconds)
+                Left(s"instance did not become ready within ${spec.readinessTimeout}${if (log.trim.nonEmpty) s"; server log: ${log.take(500)}" else ""}")
+              }
             case true  =>
               Future.successful(Right(record(serverLaunched)))
           }
@@ -414,6 +424,12 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
       case Right(_)  => launchAndReady()
     }
   }
+
+  /** best-effort tail of the service-via-exec server log, for diagnostics on readiness failure */
+  private def serverLogTail(host: String, name: String)(implicit ec: ExecutionContext): Future[String] =
+    client.exec(host, name, ExecRequest(Seq("sh", "-c", "tail -n 30 /tmp/smolvm-server.log 2>/dev/null || true"), None, Seq.empty, None, Some(10L)), 15.seconds)
+      .map { case Right(r) => r.stdout.take(1500); case _ => "" }
+      .recover { case _ => "" }
 
   private def waitReady(url: String, deadlineMs: Long)(implicit ec: ExecutionContext): Future[Boolean] =
     client.probe(url, 1.second).flatMap {
