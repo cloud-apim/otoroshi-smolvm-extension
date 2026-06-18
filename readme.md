@@ -154,6 +154,21 @@ When `code` is set it becomes the workload:
 Placement (which VM lives on which host) is kept in shared state, so a pool behaves consistently
 across an Otoroshi cluster.
 
+## Workflows
+
+Two workflow functions let you use Smol Machines from Otoroshi workflows (drag the nodes in the
+designer, or call them in workflow JSON):
+
+| Function | Does |
+|---|---|
+| `extensions.com.cloud-apim.smolmachine.call` | Send a request to a SmolMachine and return its response. Args: `ref` (required), `method`, `path`, `headers`, `query`, `body` / `body_json` / `body_base64`. Returns `{status, headers, body, body_json}`. |
+| `extensions.com.cloud-apim.smolmachine.run_code` | Run JS on a node/bun machine. Args: `ref` (required), `code` (required), `esm`, `env`, `workdir`, `timeout`. Returns `{exitCode, stdout, stderr}`. |
+
+```json
+{ "kind": "call", "function": "extensions.com.cloud-apim.smolmachine.run_code",
+  "args": { "ref": "smol-machine_node", "code": "console.log(40+2)" } }
+```
+
 ## Configuration reference (`spec`)
 
 Durations are in **milliseconds**.
