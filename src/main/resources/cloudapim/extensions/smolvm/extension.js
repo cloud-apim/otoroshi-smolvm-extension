@@ -65,7 +65,7 @@
         'spec.env': { type: 'object', props: { label: 'Env. variables' } },
         'spec.workdir': { type: 'string', props: { label: 'Working directory' } },
 
-        'spec.code': { type: 'monaco', props: { label: 'Inline node code', language: 'js', height: 400, help: 'runtime=node: when set, runs `node <code file>` instead of exec/launch command' } },
+        'spec.code': { type: 'monaco', props: { label: 'Inline node code', language: 'javascript', height: 400, help: 'runtime=node: when set, runs `node <code file>` instead of exec/launch command' } },
         'spec.code_file': { type: 'string', props: { label: 'Code file path', placeholder: '/app/index.js' } },
         'spec.dependencies': { type: 'array', props: { label: 'npm dependencies', placeholder: 'lodash', help: 'npm install-ed once at provisioning before the code runs' } },
 
