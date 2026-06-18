@@ -4,7 +4,7 @@ import akka.util.ByteString
 import com.cloud.apim.otoroshi.extensions.smolvm.entities.{ExecRequest, ExecResponse, SmolMachineSpecV1}
 import otoroshi.env.Env
 import play.api.Logger
-import play.api.libs.json.Json
+import play.api.libs.json.{JsArray, JsObject, JsString, Json}
 import play.api.libs.ws.DefaultBodyWritables._
 import play.api.libs.ws.WSResponse
 
@@ -29,6 +29,28 @@ class SmolVmClient(env: Env) {
     if (r.status >= 200 && r.status < 300) Right(())
     else Left(s"$action returned ${r.status}: ${r.body.take(512)}")
   }
+
+  /** List the machine names known to a host (GET /api/v1/machines). Used by the reconciler. */
+  def listMachines(host: String, timeout: FiniteDuration)(implicit ec: ExecutionContext): Future[Either[String, Seq[String]]] =
+    env.Ws
+      .url(api(host, "/machines"))
+      .withRequestTimeout(timeout)
+      .get()
+      .map { r =>
+        if (r.status >= 200 && r.status < 300) {
+          val arr: Seq[play.api.libs.json.JsValue] = r.json match {
+            case JsArray(vs) => vs.toSeq
+            case o: JsObject => o.value.get("machines").orElse(o.value.get("items")).collect { case JsArray(vs) => vs.toSeq }.getOrElse(Seq.empty)
+            case _           => Seq.empty
+          }
+          Right(arr.flatMap {
+            case JsString(s) => Some(s)
+            case o: JsObject => (o \ "name").asOpt[String]
+            case _           => None
+          })
+        } else Left(s"list machines returned ${r.status}: ${r.body.take(256)}")
+      }
+      .recover { case e => Left(s"list machines failed: ${e.getMessage}") }
 
   /** Liveness of a host: any non-5xx answer on the machines list. */
   def health(host: String, timeout: FiniteDuration)(implicit ec: ExecutionContext): Future[Boolean] =
