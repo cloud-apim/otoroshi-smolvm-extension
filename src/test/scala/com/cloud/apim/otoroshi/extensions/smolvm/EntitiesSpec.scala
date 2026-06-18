@@ -43,6 +43,23 @@ class EntitiesSpec extends munit.FunSuite {
     assertEquals(sDefault.instances, 1)
   }
 
+  test("SmolMachineSpec round-trips node inline code + dependencies") {
+    val spec = SmolMachineSpec(
+      image = "node:22-alpine",
+      runtime = "node",
+      mode = "exec",
+      code = Some("console.log('hi')"),
+      codeFile = "/app/handler.js",
+      dependencies = Seq("lodash", "axios")
+    )
+    val parsed = SmolMachineSpec.format.reads(spec.json).get
+    assertEquals(parsed.code, Some("console.log('hi')"))
+    assertEquals(parsed.codeFile, "/app/handler.js")
+    assertEquals(parsed.dependencies, Seq("lodash", "axios"))
+    // default code_file when absent
+    assertEquals(SmolMachineSpec.format.reads(Json.obj("image" -> "node:22-alpine")).get.codeFile, "/app/index.js")
+  }
+
   test("SmolMachineSpec drops blank launch_command / exec_command entries") {
     val j = Json.obj("image" -> "alpine", "launch_command" -> Json.arr(""), "exec_command" -> Json.arr("", "  "))
     val s = SmolMachineSpec.format.reads(j).get
