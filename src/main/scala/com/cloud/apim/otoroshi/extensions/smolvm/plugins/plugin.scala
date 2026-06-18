@@ -1,7 +1,8 @@
-package otoroshi_plugins.com.cloud.apim.plugins.smolvm
+package otoroshi_plugins.com.cloud.apim.otoroshi.extensions.smolvm.plugins
 
 import akka.stream.Materializer
 import akka.util.ByteString
+import com.cloud.apim.otoroshi.extensions.smolvm.client.{InvokeResult, SmolInvocation, SmolVmEngine}
 import otoroshi.env.Env
 import otoroshi.gateway.Errors
 import otoroshi.next.plugins.api._
