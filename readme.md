@@ -72,6 +72,56 @@ Then add the plugin to a route (plugin ref
 
 See [`SPEC.md`](./SPEC.md) for the complete reference.
 
+---
+
+## v2 — persistent machines (`SmolMachine` entity + admin extension)
+
+v2 adds **non-ephemeral, pooled machines** managed as a first-class Otoroshi entity, on top
+of an **admin extension**. The v1 plugin above is unchanged and keeps working as-is.
+
+- **Entity `SmolMachine`** (group `smolvm.extensions.cloud-apim.com`, plural `smol-machines`)
+  carries a `SmolMachineSpec`: image, resources, network, **`instances` (1..n)**, execution
+  **`mode`**, **`runtime`**, the machine's own smolvm **hosts**, readiness, timeouts and
+  `idle_timeout`. Managed via the admin API and the back-office **SmolVM Machines** page.
+- **Lazy pool**: instances are created on the first request (up to `instances`), reused
+  across requests, and idle ones reaped (leader-only). The placement (`instance → host`)
+  lives in an **external Redis** reached through otoroshi's StatefulClient, so it is
+  **cluster-safe**.
+- **New plugin `SmolMachineBackend`** — config is **only a reference** to a `SmolMachine`
+  (`cp:otoroshi_plugins.com.cloud.apim.plugins.smolvm.SmolMachineBackend`).
+
+### Execution modes (v2)
+
+| Mode | How it works |
+|---|---|
+| `service` | image runs the HTTP server; proxied (now persistent, reused) |
+| `exec` | stdin JSON → stdout JSON per request (classic watchdog), on a reused machine |
+| `service-via-exec` | generic kept-alive image; the plugin **launches the HTTP server with an `exec`** (`launch_command`), waits readiness, then proxies |
+
+### Node runtime (`runtime: node`)
+
+A kept-alive `node:22-alpine` machine exposing the `smolvm-sdk` node preset over HTTP →
+`exec`: `POST /run` (`node -e`), `/eval`, `/run-file`, `/npm`, `/npm/install`, `/npx`,
+`GET /version`, `PUT /files/<path>`. Combine with `mode: service-via-exec` to run a node
+HTTP app as a proxied service. See [`examples/smolmachine-node`](./examples/smolmachine-node)
+and [`examples/smolmachine-service-via-exec`](./examples/smolmachine-service-via-exec).
+
+> The micro-VM must stay alive to be `exec`-able. smolvm has no `cmd` at machine creation,
+> so the **image's CMD must keep PID 1 alive** (e.g. `CMD ["sleep","infinity"]`); the node
+> examples ship such an image.
+
+### Enable it
+
+```hocon
+# otoroshi config (or env)
+CLOUD_APIM_EXTENSIONS_SMOLMACHINE_ENABLED=true
+CLOUD_APIM_EXTENSIONS_SMOLMACHINE_STATE_URI=redis://127.0.0.1:6379/0   # optional; falls back to otoroshi's datastore redis
+```
+
+The admin extension is auto-discovered on the classpath (same jar). Security: the node
+runtime executes arbitrary code by design — protect routes with auth and bound egress with
+`spec.allow_cidrs`.
+
 ## License
 
 Apache-2.0 — Copyright Cloud APIM. See [LICENSE](./LICENSE).
