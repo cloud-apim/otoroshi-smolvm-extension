@@ -57,6 +57,7 @@ class SmolMachineExtension(val env: Env) extends AdminExtension {
 
   override def start(): Unit = {
     SmolMachineExtension.logger.info("the 'SmolVM Machines' extension is enabled !")
+    com.cloud.apim.otoroshi.extensions.smolvm.workflows.SmolMachineWorkflowFunctions.registerAll()
     val reaperEnabled = configuration.getOptional[Boolean]("reaper.enabled").getOrElse(true)
     if (reaperEnabled) {
       implicit val ec = env.otoroshiExecutionContext
