@@ -86,10 +86,11 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
   private def sanitize(s: String): String =
     s.toLowerCase.replaceAll("[^a-z0-9-]", "-").replaceAll("-+", "-").stripPrefix("-").take(32)
 
-  // smolvm rejects names with consecutive hyphens / leading-trailing hyphens, so collapse after joining
-  // (sanitize(machineId) may be truncated and end with a hyphen, which would create "--" before the slot)
+  // smolvm rejects names with consecutive hyphens / leading-trailing hyphens, so collapse after joining.
+  // A short random suffix makes each provisioning's name unique, so a late teardown of an old instance
+  // never deletes a newer instance that reused the same slot.
   private def instanceName(machineId: String, slot: Int): String =
-    s"otoroshi-smol-${sanitize(machineId)}-$slot".replaceAll("-+", "-").stripPrefix("-").stripSuffix("-")
+    s"otoroshi-smol-${sanitize(machineId)}-$slot-${java.util.UUID.randomUUID().toString.take(8)}".replaceAll("-+", "-").stripPrefix("-").stripSuffix("-")
 
   private def isProxyMode(spec: SmolMachineSpec): Boolean = spec.mode == "service" || spec.mode == "service-via-exec"
   // JS runtimes (node / bun): expose the RPC facade, inline code and dependency install
@@ -382,11 +383,17 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
         // Run the server in the FOREGROUND of an exec connection we keep open (fire-and-forget):
         // a backgrounded process (`nohup`/`setsid` + `&`) gets reaped when smolvm closes the exec.
         // The server lives as long as this connection is open; it dies when the VM is deleted/reaped.
-        // `timeoutSecs = None` => no guest-side time limit; a very long HTTP timeout keeps it open.
-        val sh = s"exec ${cmd.mkString(" ")} > /tmp/smolvm-server.log 2>&1"
+        // A heartbeat on stdout every 60s prevents the play-ws read timeout (120s) from closing an
+        // otherwise-idle connection (server output goes to a file, not the connection).
+        val sh = s"(while true; do echo __smolvm_keepalive__; sleep 60; done) & ${cmd.mkString(" ")} > /tmp/smolvm-server.log 2>&1"
         logger.info(s"[$name] launching server (foreground, kept-open exec): ${cmd.mkString(" ")}")
         client.exec(host, name, ExecRequest(Seq("sh", "-c", sh), None, spec.env.toSeq, spec.workdir, None), serverExecTimeout)
-          .onComplete(res => logger.info(s"[$name] server exec connection ended: $res"))
+          .onComplete { res =>
+            // the connection closing means the server is gone; release the instance so otoroshi
+            // state matches smolvm (next request re-provisions a fresh one)
+            logger.warn(s"[$name] server exec connection ended ($res) — releasing instance to keep state in sync")
+            releaseInstance(machine.id, slot, host, name)
+          }
         Future.successful(Right(true))
       case ("service-via-exec", _)                          =>
         Future.successful(Left("mode 'service-via-exec' requires a non-empty launch_command (or spec.code)"))
@@ -478,6 +485,22 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
             }
         }.recover { case e => InvokeResult.Failed(502, s"exec error: ${e.getMessage}") }
     }
+  }
+
+  /**
+   * Release an instance: remove it from the registry (only if the slot still holds THIS instance,
+   * to avoid evicting a newer one that reused the slot) and delete its VM. Idempotent / best-effort.
+   */
+  private def releaseInstance(machineId: String, slot: Int, host: String, name: String)(implicit ec: ExecutionContext): Unit = {
+    if (slot >= 0) {
+      state.hgetAll(instancesKey(machineId)).foreach { m =>
+        m.get(slot.toString).flatMap(InstanceRecord.parse) match {
+          case Some(rec) if rec.name == name => state.hdel(instancesKey(machineId), slot.toString)
+          case _                             => ()
+        }
+      }
+    }
+    client.delete(host, name, 15.seconds)
   }
 
   // ---- reaper (idle / orphan GC) -------------------------------------------
