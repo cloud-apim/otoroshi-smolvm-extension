@@ -1,0 +1,8 @@
+{
+  "_comment": "Drop into an Otoroshi route's 'plugins' array. Each request runs the inline JS (node /app/index.js) on a pooled node machine, with the request envelope on stdin.",
+  "plugin": "cp:otoroshi_plugins.com.cloud.apim.otoroshi.extensions.smolvm.plugins.SmolMachineBackend",
+  "enabled": true,
+  "config": {
+    "ref": "smol-machine_node_inline"
+  }
+}

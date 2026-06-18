@@ -1,0 +1,23 @@
+{
+  "_comment": "Inline node code defined on the entity. mode=exec + runtime=node + spec.code -> each request runs `node /app/index.js` with the request envelope on stdin (stdin JSON -> stdout JSON). spec.dependencies are npm install-ed once at provisioning. Use the smolvm-node-keepalive image (FROM node:22-alpine, CMD sleep infinity).",
+  "id": "smol-machine_node_inline",
+  "name": "node inline code",
+  "description": "Runs JS baked on the entity, with an npm dependency",
+  "enabled": true,
+  "tags": [],
+  "metadata": {},
+  "spec": {
+    "image": "smolvm-node-keepalive:latest",
+    "instances": 1,
+    "mode": "exec",
+    "runtime": "node",
+    "network": true,
+    "hosts": ["http://127.0.0.1:8080"],
+    "dependencies": ["lodash"],
+    "code_file": "/app/index.js",
+    "code": "const chunks=[];process.stdin.on('data',c=>chunks.push(c));process.stdin.on('end',()=>{const req=JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');const _=require('lodash');const out={msg:_.upperFirst('hello from inline node'),method:req.method,path:req.path};process.stdout.write(JSON.stringify({status:200,headers:{'content-type':'application/json'},body:JSON.stringify(out)}));});",
+    "request_timeout": 30000,
+    "boot_timeout": 120000,
+    "idle_timeout": 600000
+  }
+}
