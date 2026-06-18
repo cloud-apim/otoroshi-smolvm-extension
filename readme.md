@@ -49,7 +49,7 @@ sbt package
 ```
 
 Then add the plugin to a route (plugin ref
-`cp:otoroshi_plugins.com.cloud.apim.plugins.smolvm.SmolVmFunctionBackend`).
+`cp:otoroshi_plugins.com.cloud.apim.otoroshi.extensions.smolvm.plugins.SmolVmFunctionBackend`).
 
 ## Configuration
 
@@ -91,7 +91,7 @@ of an **admin extension**. The v1 plugin above is unchanged and keeps working as
   down after (the v1 behaviour, but driven by the entity). No pool, no registry, no reaper —
   maximum isolation (great for one-shot node code execution).
 - **New plugin `SmolMachineBackend`** — config is **only a reference** to a `SmolMachine`
-  (`cp:otoroshi_plugins.com.cloud.apim.plugins.smolvm.SmolMachineBackend`).
+  (`cp:otoroshi_plugins.com.cloud.apim.otoroshi.extensions.smolvm.plugins.SmolMachineBackend`).
 
 ### Execution modes (v2)
 
@@ -108,6 +108,14 @@ A kept-alive `node:22-alpine` machine exposing the `smolvm-sdk` node preset over
 `GET /version`, `PUT /files/<path>`. Combine with `mode: service-via-exec` to run a node
 HTTP app as a proxied service. See [`examples/smolmachine-node`](./examples/smolmachine-node)
 and [`examples/smolmachine-service-via-exec`](./examples/smolmachine-service-via-exec).
+
+**Inline code**: instead of the per-request RPC, you can bake the JS on the entity. Set
+`spec.code` (and optionally `spec.dependencies` for an `npm install` at provisioning, and
+`spec.code_file`, default `/app/index.js`). When `code` is set it **overrides the command**:
+- `mode: exec` → each request runs `node <code_file>` with the request envelope on stdin
+  (stdin JSON → stdout JSON contract); the RPC endpoints are disabled.
+- `mode: service-via-exec` → the code IS the HTTP server (`node <code_file>` is launched),
+  then proxied.
 
 > The micro-VM must stay alive to be `exec`-able. smolvm has no `cmd` at machine creation,
 > so the **image's CMD must keep PID 1 alive** (e.g. `CMD ["sleep","infinity"]`); the node
