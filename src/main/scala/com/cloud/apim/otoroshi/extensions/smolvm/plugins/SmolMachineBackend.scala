@@ -105,18 +105,19 @@ class SmolMachineBackend extends NgBackendCall {
       case (None, _)             => fail(500, "the SmolMachine admin extension is not enabled")
       case (_, None)             => fail(404, s"smol machine '${config.ref}' not found")
       case (Some(ext), Some(machine)) =>
+        val req = ctx.request.copy(url = ctx.request.url.replaceAll("//", "/"))
         val bodyF: Future[ByteString] =
-          if (ctx.request.hasBody) ctx.request.body.runFold(ByteString.empty)(_ ++ _)
+          if (req.hasBody) req.body.runFold(ByteString.empty)(_ ++ _)
           else Future.successful(ByteString.empty)
         bodyF
           .map { bodyBytes =>
             SmolInvocation(
               snowflake = ctx.snowflake,
-              method = ctx.request.method,
-              relativeUri = ctx.request.relativeUri,
-              path = ctx.request.path,
-              query = ctx.request.queryParams,
-              headers = ctx.request.headers,
+              method = req.method,
+              relativeUri = req.relativeUri,
+              path = req.path,
+              query = req.queryParams,
+              headers = req.headers,
               bodyBytes = bodyBytes
             )
           }
