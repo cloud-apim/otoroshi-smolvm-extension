@@ -77,7 +77,10 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
   private def sanitize(s: String): String =
     s.toLowerCase.replaceAll("[^a-z0-9-]", "-").replaceAll("-+", "-").stripPrefix("-").take(32)
 
-  private def instanceName(machineId: String, slot: Int): String = s"otoroshi-smol-${sanitize(machineId)}-$slot"
+  // smolvm rejects names with consecutive hyphens / leading-trailing hyphens, so collapse after joining
+  // (sanitize(machineId) may be truncated and end with a hyphen, which would create "--" before the slot)
+  private def instanceName(machineId: String, slot: Int): String =
+    s"otoroshi-smol-${sanitize(machineId)}-$slot".replaceAll("-+", "-").stripPrefix("-").stripSuffix("-")
 
   private def isProxyMode(spec: SmolMachineSpec): Boolean = spec.mode == "service" || spec.mode == "service-via-exec"
   private def isNodeRpc(spec: SmolMachineSpec): Boolean   = spec.runtime == "node" && spec.mode == "exec"
