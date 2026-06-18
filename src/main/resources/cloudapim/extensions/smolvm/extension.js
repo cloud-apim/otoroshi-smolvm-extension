@@ -239,7 +239,7 @@
                 optionsTransformer: { label: 'name', value: 'id' },
               },
             },
-            code: { type: 'monaco', label: 'Code', props: { language: 'javascript', height: 300 } },
+            code: { type: 'any', label: 'Code', props: { language: 'javascript', height: 300 } },
             esm: { type: 'bool', label: 'ESM' },
           },
         },
