@@ -47,6 +47,10 @@ case class SmolMachineSpec(
     execCommand: Option[Seq[String]] = None,   // classic watchdog (stdin JSON -> stdout JSON)
     env: Map[String, String] = Map.empty,
     workdir: Option[String] = None,
+    // ---- node inline code (runtime=node) ------------------------------------
+    code: Option[String] = None,               // inline JS; when set, OVERRIDES exec_command / launch_command with `node <codeFile>`
+    codeFile: String = "/app/index.js",        // where the inline code is written inside the VM
+    dependencies: Seq[String] = Seq.empty,     // npm packages installed once at provisioning (before launch / first exec)
     // ---- timeouts & lifecycle -----------------------------------------------
     bootTimeout: FiniteDuration = 60.seconds,
     requestTimeout: FiniteDuration = 30.seconds,
@@ -89,6 +93,9 @@ object SmolMachineSpec {
       "exec_command"      -> o.execCommand.map(s => Json.toJson(s)).getOrElse(JsNull).as[JsValue],
       "env"               -> o.env,
       "workdir"           -> o.workdir.map(JsString.apply).getOrElse(JsNull).as[JsValue],
+      "code"              -> o.code.map(JsString.apply).getOrElse(JsNull).as[JsValue],
+      "code_file"         -> o.codeFile,
+      "dependencies"      -> o.dependencies,
       "boot_timeout"      -> o.bootTimeout.toMillis,
       "request_timeout"   -> o.requestTimeout.toMillis,
       "idle_timeout"      -> o.idleTimeout.toMillis
@@ -132,6 +139,9 @@ object SmolMachineSpec {
         execCommand = (json \ "exec_command").asOpt[Seq[String]].map(_.filter(_.trim.nonEmpty)).filter(_.nonEmpty),
         env = (json \ "env").asOpt[Map[String, String]].getOrElse(Map.empty),
         workdir = (json \ "workdir").asOpt[String].filter(_.trim.nonEmpty),
+        code = (json \ "code").asOpt[String].filter(_.trim.nonEmpty),
+        codeFile = (json \ "code_file").asOpt[String].filter(_.trim.nonEmpty).getOrElse("/app/index.js"),
+        dependencies = (json \ "dependencies").asOpt[Seq[String]].map(_.filter(_.trim.nonEmpty)).getOrElse(Seq.empty),
         bootTimeout = ms("boot_timeout", 60.seconds),
         requestTimeout = ms("request_timeout", 30.seconds),
         idleTimeout = ms("idle_timeout", 5.minutes)
