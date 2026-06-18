@@ -11,6 +11,7 @@ import play.api.libs.json._
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
+import scala.collection.JavaConverters._
 import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success, Try}
@@ -75,6 +76,10 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
 
   // small TTL cache for hosts fetched from a url: url -> (expiresAtMs, hosts)
   private val urlHostsCache = new ConcurrentHashMap[String, (Long, Seq[String])]()
+
+  // reconciler: "host|name" -> first time seen as an orphan (process-local; reaper is leader-only).
+  // Gives orphans a grace window so a VM still being provisioned isn't mistaken for an orphan.
+  private val orphanFirstSeen = new ConcurrentHashMap[String, Long]()
 
   private def instancesKey(id: String): String = s"smolvm:state:$id:instances"
   private def lockKey(id: String): String      = s"smolvm:state:$id:lock"
@@ -503,22 +508,66 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
     client.delete(host, name, 15.seconds)
   }
 
-  // ---- reaper (idle / orphan GC) -------------------------------------------
+  // ---- reconciler (idle GC + dead cleanup + orphan GC) ---------------------
 
-  /** Delete instances idle for longer than `idle_timeout` and prune them from the registry. */
-  def reap(machine: SmolMachine)(implicit ec: ExecutionContext): Future[Int] = {
-    val spec = machine.spec
-    state.hgetAll(instancesKey(machine.id)).flatMap { m =>
-      val now      = System.currentTimeMillis()
-      val toReap   = m.flatMap { case (field, v) => InstanceRecord.parse(v).map(field -> _) }
-        .filter { case (_, rec) => now - rec.lastUsedAtMs > spec.idleTimeout.toMillis }
-        .toSeq
-      Future.sequence(toReap.map { case (field, rec) =>
-        logger.info(s"[${rec.name}] reaping idle instance on ${rec.host} (idle ${(now - rec.lastUsedAtMs) / 1000}s)")
-        client.delete(rec.host, rec.name, 15.seconds)
-          .recover { case e => Left(e.getMessage) }
-          .flatMap(_ => state.hdel(instancesKey(machine.id), field))
-      }).map(_ => toReap.size)
-    }.recover { case e => logger.warn(s"[${machine.id}] reap failed: ${e.getMessage}"); 0 }
+  /**
+   * Reconcile the registry with the actual state of the machine's smolvm hosts (leader-only):
+   *  - idle instances (`now - lastUsed > idle_timeout`)            -> delete VM + drop from registry
+   *  - registry entries whose VM is gone on a reachable host       -> drop from registry (host restart, crash)
+   *  - live VMs matching our prefix that are not in the registry   -> delete (orphans), after a grace window
+   *
+   * Unreachable hosts are skipped (no destructive action) so a transient outage doesn't wipe state.
+   */
+  def reconcile(machine: SmolMachine)(implicit ec: ExecutionContext): Future[Int] = {
+    val spec    = machine.spec
+    val mkey    = instancesKey(machine.id)
+    val prefix  = s"otoroshi-smol-${sanitize(machine.id)}-"
+    val graceMs = spec.bootTimeout.toMillis + 60000L
+    hostsFor(spec).flatMap { hosts =>
+      state.hgetAll(mkey).flatMap { map =>
+        val records        = map.flatMap { case (f, v) => InstanceRecord.parse(v).map(f -> _) }
+        val candidateHosts = (records.values.map(_.host).toSet ++ hosts.toSet).toSeq
+        Future.traverse(candidateHosts)(h => client.listMachines(h, 10.seconds).map(r => h -> r)).map { listed =>
+          val now        = System.currentTimeMillis()
+          val liveByHost = listed.collect { case (h, Right(names)) => h -> names.filter(_.startsWith(prefix)).toSet }.toMap
+          val reachable  = liveByHost.keySet
+          var changes    = 0
+
+          // 1. registry cleanup (idle or dead)
+          records.foreach { case (field, rec) =>
+            val idle = now - rec.lastUsedAtMs > spec.idleTimeout.toMillis
+            val dead = reachable.contains(rec.host) && !liveByHost(rec.host).contains(rec.name) && (now - rec.createdAtMs > graceMs)
+            if (idle) {
+              logger.info(s"[${rec.name}] reaping idle instance on ${rec.host} (idle ${(now - rec.lastUsedAtMs) / 1000}s)")
+              client.delete(rec.host, rec.name, 15.seconds)
+              state.hdel(mkey, field)
+              changes += 1
+            } else if (dead) {
+              logger.warn(s"[${rec.name}] VM not found on ${rec.host} — dropping from registry")
+              state.hdel(mkey, field)
+              changes += 1
+            }
+          }
+
+          // 2. orphan cleanup (live VM with our prefix, not in the registry), with a 2-pass grace
+          val knownNames     = records.values.map(_.name).toSet
+          val currentOrphans = liveByHost.flatMap { case (h, names) => names.filterNot(knownNames.contains).map(n => (s"$h|$n", h, n)) }.toSeq
+          val currentKeys    = currentOrphans.map(_._1).toSet
+          orphanFirstSeen.keySet().asScala
+            .filter(k => k.split("\\|", 2).lift(1).exists(_.startsWith(prefix)) && !currentKeys.contains(k))
+            .foreach(orphanFirstSeen.remove)
+          currentOrphans.foreach { case (k, h, n) =>
+            val first = Option(orphanFirstSeen.putIfAbsent(k, now)).getOrElse(now)
+            if (now - first > graceMs) {
+              logger.warn(s"[$n] orphan VM on $h (not in registry) — deleting")
+              client.delete(h, n, 15.seconds)
+              orphanFirstSeen.remove(k)
+              changes += 1
+            }
+          }
+          changes
+        }
+      }
+    }.recover { case e => logger.warn(s"[${machine.id}] reconcile failed: ${e.getMessage}"); 0 }
   }
 }
