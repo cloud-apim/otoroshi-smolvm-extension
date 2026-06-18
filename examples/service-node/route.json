@@ -1,6 +1,6 @@
 {
   "_comment": "Drop this object into an Otoroshi route's 'plugins' array. Otoroshi reverse-proxies to the HTTP server running in the micro-VM.",
-  "plugin": "cp:otoroshi_plugins.com.cloud.apim.plugins.smolvm.SmolVmFunctionBackend",
+  "plugin": "cp:otoroshi_plugins.com.cloud.apim.otoroshi.extensions.smolvm.plugins.SmolVmFunctionBackend",
   "enabled": true,
   "config": {
     "mode": "service",
