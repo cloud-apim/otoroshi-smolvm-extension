@@ -92,16 +92,19 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
     s"otoroshi-smol-${sanitize(machineId)}-$slot".replaceAll("-+", "-").stripPrefix("-").stripSuffix("-")
 
   private def isProxyMode(spec: SmolMachineSpec): Boolean = spec.mode == "service" || spec.mode == "service-via-exec"
-  private def hasInlineCode(spec: SmolMachineSpec): Boolean = spec.runtime == "node" && spec.code.exists(_.trim.nonEmpty)
-  // node RPC only when there is no inline code (inline code overrides the command instead)
-  private def isNodeRpc(spec: SmolMachineSpec): Boolean   = spec.runtime == "node" && spec.mode == "exec" && !hasInlineCode(spec)
+  // JS runtimes (node / bun): expose the RPC facade, inline code and dependency install
+  private def isJsRuntime(spec: SmolMachineSpec): Boolean   = JsRuntimeCommands.forRuntime(spec.runtime).isDefined
+  private def jsBin(spec: SmolMachineSpec): String          = JsRuntimeCommands.forRuntime(spec.runtime).map(_.bin).getOrElse("node")
+  private def hasInlineCode(spec: SmolMachineSpec): Boolean = isJsRuntime(spec) && spec.code.exists(_.trim.nonEmpty)
+  // RPC only when there is no inline code (inline code overrides the command instead)
+  private def isJsRpc(spec: SmolMachineSpec): Boolean       = isJsRuntime(spec) && spec.mode == "exec" && !hasInlineCode(spec)
 
   private def nodeCodePath(spec: SmolMachineSpec): String = if (spec.codeFile.startsWith("/")) spec.codeFile else s"/${spec.codeFile}"
   private def parentDir(path: String): String = { val i = path.lastIndexOf('/'); if (i <= 0) "/" else path.substring(0, i) }
 
-  /** Inline node code overrides exec_command / launch_command with `node <codeFile>`. */
+  /** Inline code overrides exec_command / launch_command with `<bin> <codeFile>` (node / bun). */
   private def effectiveCommand(spec: SmolMachineSpec, configured: Option[Seq[String]]): Option[Seq[String]] =
-    if (hasInlineCode(spec)) Some(Seq("node", nodeCodePath(spec))) else configured
+    if (hasInlineCode(spec)) Some(Seq(jsBin(spec), nodeCodePath(spec))) else configured
 
   // ---- host resolution ------------------------------------------------------
 
@@ -179,7 +182,7 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
   /** Dispatch a request to a (ready) instance based on mode/runtime. */
   private def route(machine: SmolMachine, rec: InstanceRecord, inv: SmolInvocation)(implicit ec: ExecutionContext): Future[InvokeResult] = {
     val spec = machine.spec
-    if (isNodeRpc(spec)) NodeRuntime.handle(client, rec.host, rec.name, spec, inv)
+    if (isJsRpc(spec)) NodeRuntime.handle(client, rec.host, rec.name, spec, inv)
     else if (isProxyMode(spec)) runProxy(rec, spec, inv)
     else runExec(rec, spec, inv)
   }
@@ -330,8 +333,9 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
    */
   private def prepareNode(machine: SmolMachine, host: String, name: String)(implicit ec: ExecutionContext): Future[Either[String, Unit]] = {
     val spec = machine.spec
-    if (spec.runtime != "node" || (spec.code.forall(_.trim.isEmpty) && spec.dependencies.isEmpty)) Future.successful(Right(()))
+    if (!isJsRuntime(spec) || (spec.code.forall(_.trim.isEmpty) && spec.dependencies.isEmpty)) Future.successful(Right(()))
     else {
+      val rt       = JsRuntimeCommands.forRuntime(spec.runtime).getOrElse(JsRuntimeCommands.node)
       val codePath = nodeCodePath(spec)
       val dir      = parentDir(codePath)
       def execOk(label: String, req: ExecRequest, timeout: FiniteDuration): Future[Either[String, Unit]] =
@@ -345,8 +349,9 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
         case Right(_) =>
           val depsF =
             if (spec.dependencies.nonEmpty) {
-              logger.info(s"[$name] npm install ${spec.dependencies.mkString(" ")} (in $dir)")
-              execOk("npm install", ExecRequest(Seq("npm", "install") ++ spec.dependencies, None, spec.env.toSeq, Some(dir), Some(spec.bootTimeout.toSeconds)), spec.bootTimeout)
+              val installCmd = rt.install ++ spec.dependencies
+              logger.info(s"[$name] ${installCmd.mkString(" ")} (in $dir)")
+              execOk("install dependencies", ExecRequest(installCmd, None, spec.env.toSeq, Some(dir), Some(spec.bootTimeout.toSeconds)), spec.bootTimeout)
             } else Future.successful(Right(()))
           depsF.flatMap {
             case Left(e)  => Future.successful(Left(e))
