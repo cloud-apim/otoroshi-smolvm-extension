@@ -40,6 +40,13 @@ class EntitiesSpec extends munit.FunSuite {
     assertEquals(s.runtime, "none")
   }
 
+  test("SmolMachineSpec drops blank launch_command / exec_command entries") {
+    val j = Json.obj("image" -> "alpine", "launch_command" -> Json.arr(""), "exec_command" -> Json.arr("", "  "))
+    val s = SmolMachineSpec.format.reads(j).get
+    assertEquals(s.launchCommand, None)
+    assertEquals(s.execCommand, None)
+  }
+
   test("SmolMachine entity JSON round-trips with embedded spec") {
     val m = SmolMachine(
       id = "smol-machine_1",
