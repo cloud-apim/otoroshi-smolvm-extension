@@ -1,10 +1,12 @@
-package otoroshi_plugins.com.cloud.apim.plugins.smolvm
+package com.cloud.apim.otoroshi.extensions.smolvm.client
 
 import akka.pattern.after
 import akka.stream.Materializer
 import akka.stream.scaladsl.Source
 import akka.util.ByteString
+import com.cloud.apim.otoroshi.extensions.smolvm.entities._
 import otoroshi.env.Env
+import otoroshi_plugins.com.cloud.apim.otoroshi.extensions.smolvm.plugins.SmolVmFunctionConfig
 import play.api.Logger
 import play.api.libs.json._
 
@@ -111,7 +113,7 @@ class SmolVmEngine(env: Env) {
 
   // ---- provisioning ---------------------------------------------------------
 
-  private def provision(host: String, name: String, spec: SmolMachineSpec, timeout: FiniteDuration)(implicit
+  private def provision(host: String, name: String, spec: SmolMachineSpecV1, timeout: FiniteDuration)(implicit
       ec: ExecutionContext
   ): Future[Either[String, Unit]] = {
     logger.debug(s"[$name] create on $host: ${Json.stringify(spec.json)}")
@@ -130,7 +132,7 @@ class SmolVmEngine(env: Env) {
     }
   }
 
-  private def attemptOnHosts(hosts: Seq[String], name: String, spec: SmolMachineSpec, timeout: FiniteDuration)(implicit
+  private def attemptOnHosts(hosts: Seq[String], name: String, spec: SmolMachineSpecV1, timeout: FiniteDuration)(implicit
       ec: ExecutionContext
   ): Future[Either[String, String]] = {
     val ordered = roundRobinOrder(hosts).take(math.min(hosts.size, 3)).toList
@@ -173,14 +175,14 @@ class SmolVmEngine(env: Env) {
     }
 
   /** `servicePortMapping` = Some((hostPort, guestPort)) for service mode. */
-  private def buildSpec(cfg: SmolVmFunctionConfig, name: String, servicePortMapping: Option[(Int, Int)]): SmolMachineSpec = {
+  private def buildSpec(cfg: SmolVmFunctionConfig, name: String, servicePortMapping: Option[(Int, Int)]): SmolMachineSpecV1 = {
     val isService  = servicePortMapping.isDefined
     val ports      = servicePortMapping.map { case (h, g) => SmolPort(h, g) }.toSeq ++ cfg.ports.flatMap(parsePort)
     val mounts     = cfg.volumes.flatMap(parseMount)
     val netEnabled = cfg.networkEnabled || isService || cfg.allowCidrs.nonEmpty
     // published ports have no inbound path on the default TSI backend
     val backend    = if (ports.nonEmpty) Some("virtio-net") else None
-    SmolMachineSpec(
+    SmolMachineSpecV1(
       name = name,
       image = cfg.image,
       cpus = Some(cfg.cpus),
