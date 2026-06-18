@@ -24,7 +24,7 @@
         metadata: { type: 'object', props: { label: 'Metadata' } },
 
         'spec.image': { type: 'string', props: { label: 'Image', placeholder: 'node:22-alpine' } },
-        'spec.instances': { type: 'number', props: { label: 'Instances', help: 'Pool size (1..n)' } },
+        'spec.instances': { type: 'number', props: { label: 'Instances', help: '0 = ephemeral (fresh VM per request, torn down after); n = persistent pool size' } },
         'spec.mode': {
           type: 'select',
           props: {
@@ -48,7 +48,7 @@
         },
 
         'spec.hosts': { type: 'array', props: { label: 'smolvm hosts', placeholder: 'http://host:8080' } },
-        'spec.hosts_url': { type: 'string', props: { label: 'Hosts Pool URL' } },
+        'spec.hosts_url': { type: 'string', props: { label: 'Hosts Pool URL', help: 'An URL that returns a json array of smolvm hosts' } },
         'spec.network': { type: 'bool', props: { label: 'Network enabled (outbound)' } },
         'spec.allow_cidrs': { type: 'array', props: { label: 'Egress allowed CIDRs' } },
         'spec.cpus': { type: 'number', props: { label: 'vCPUs' } },
