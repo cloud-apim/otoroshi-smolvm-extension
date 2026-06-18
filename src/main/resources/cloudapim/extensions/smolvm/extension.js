@@ -197,6 +197,53 @@
         { path: `/${BASE}/:taction`, component: (props) => React.createElement(SmolMachinesPage, props, null) },
         { path: `/${BASE}`, component: (props) => React.createElement(SmolMachinesPage, props, null) },
       ],
+      workflowNodes: [
+        {
+          name: 'extensions.com.cloud-apim.smolmachine.call',
+          kind: 'extensions.com.cloud-apim.smolmachine.call',
+          display_name: 'Smol Machine call',
+          description: 'Send a request to a SmolMachine and return its response',
+          icon: 'fas fa-microchip',
+          sources: ['output'],
+          flow: ['ref', 'method', 'path', 'headers', 'query', 'body_json'],
+          form_schema: {
+            ref: {
+              type: 'select',
+              label: 'Smol Machine',
+              props: {
+                optionsFrom: `/bo/api/proxy/apis/${GROUP}/${VERSION}/${PLURAL}`,
+                optionsTransformer: { label: 'name', value: 'id' },
+              },
+            },
+            method: { type: 'string', label: 'Method', props: { placeholder: 'GET' } },
+            path: { type: 'string', label: 'Path', props: { placeholder: '/' } },
+            headers: { type: 'object', label: 'Headers' },
+            query: { type: 'object', label: 'Query' },
+            body_json: { type: 'any', label: 'Body (json)', props: { height: '150px' } },
+          },
+        },
+        {
+          name: 'extensions.com.cloud-apim.smolmachine.run_code',
+          kind: 'extensions.com.cloud-apim.smolmachine.run_code',
+          display_name: 'Smol Machine run code',
+          description: 'Run JS code on a node/bun SmolMachine and return {exitCode, stdout, stderr}',
+          icon: 'fas fa-code',
+          sources: ['output'],
+          flow: ['ref', 'code', 'esm'],
+          form_schema: {
+            ref: {
+              type: 'select',
+              label: 'Smol Machine',
+              props: {
+                optionsFrom: `/bo/api/proxy/apis/${GROUP}/${VERSION}/${PLURAL}`,
+                optionsTransformer: { label: 'name', value: 'id' },
+              },
+            },
+            code: { type: 'monaco', label: 'Code', props: { language: 'javascript', height: 300 } },
+            esm: { type: 'bool', label: 'ESM' },
+          },
+        },
+      ],
     };
   });
 })();
