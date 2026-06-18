@@ -95,6 +95,12 @@ class EntitiesSpec extends munit.FunSuite {
     assertEquals(parsed.spec.instances, 2)
   }
 
+  test("workflow functions register under their namespaced names") {
+    com.cloud.apim.otoroshi.extensions.smolvm.workflows.SmolMachineWorkflowFunctions.registerAll()
+    assert(otoroshi.next.workflow.WorkflowFunction.get("extensions.com.cloud-apim.smolmachine.call").isDefined)
+    assert(otoroshi.next.workflow.WorkflowFunction.get("extensions.com.cloud-apim.smolmachine.run_code").isDefined)
+  }
+
   test("InstanceRecord JSON round-trips") {
     val rec    = InstanceRecord(2, "otoroshi-smol-x-2", "http://h:8080", 20002, "ready", serverLaunched = true, 1L, 2L)
     val parsed = InstanceRecord.parse(Json.stringify(rec.json)).get
