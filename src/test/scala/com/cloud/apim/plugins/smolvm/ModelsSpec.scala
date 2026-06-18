@@ -1,7 +1,6 @@
 package com.cloud.apim.plugins.smolvm
 
 import com.cloud.apim.otoroshi.extensions.smolvm.entities.{ExecEnvelope, ExecRequest, ExecResponse, SmolMachineSpecV1, SmolMount, SmolPort}
-import otoroshi_plugins.com.cloud.apim.plugins.smolvm._
 import play.api.libs.json.Json
 
 class ModelsSpec extends munit.FunSuite {
