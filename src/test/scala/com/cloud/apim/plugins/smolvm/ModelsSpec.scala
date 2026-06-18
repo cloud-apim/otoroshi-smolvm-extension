@@ -1,12 +1,13 @@
 package com.cloud.apim.plugins.smolvm
 
+import com.cloud.apim.otoroshi.extensions.smolvm.entities.{ExecEnvelope, ExecRequest, ExecResponse, SmolMachineSpecV1, SmolMount, SmolPort}
 import otoroshi_plugins.com.cloud.apim.plugins.smolvm._
 import play.api.libs.json.Json
 
 class ModelsSpec extends munit.FunSuite {
 
   test("SmolMachineSpec.json maps fields to the smolvm 1.0.4 create body") {
-    val spec = SmolMachineSpec(
+    val spec = SmolMachineSpecV1(
       name = "otoroshi-fn-123",
       image = "alpine",
       cpus = Some(2),
@@ -31,6 +32,16 @@ class ModelsSpec extends munit.FunSuite {
     assertEquals((j \ "mounts" \ 0 \ "target").as[String], "/app")
     // optional/empty fields must be omitted
     assert((j \ "storageGb").toOption.isEmpty)
+  }
+
+  test("SmolMachineSpec.json emits `from` and omits empty `image`") {
+    val withImage = SmolMachineSpecV1(name = "m1", image = "alpine").json
+    assertEquals((withImage \ "image").as[String], "alpine")
+    assert((withImage \ "from").toOption.isEmpty)
+
+    val withFrom = SmolMachineSpecV1(name = "m2", image = "", from = Some("./app.smolmachine")).json
+    assertEquals((withFrom \ "from").as[String], "./app.smolmachine")
+    assert((withFrom \ "image").toOption.isEmpty, "empty image must be omitted when `from` is used")
   }
 
   test("ExecRequest.json uses smolvm exec field names (stdin/workdir/timeoutSecs/env)") {
