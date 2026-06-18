@@ -1,4 +1,4 @@
-package otoroshi_plugins.com.cloud.apim.plugins.smolvm
+package com.cloud.apim.otoroshi.extensions.smolvm.entities
 
 import play.api.libs.json._
 
@@ -20,7 +20,7 @@ case class SmolPort(host: Int, guest: Int) {
 }
 
 /** Body of `POST /api/v1/machines` (CreateMachineRequest). Only image (or `from`) is meaningful. */
-case class SmolMachineSpec(
+case class SmolMachineSpecV1(
     name: String,
     image: String,
     from: Option[String] = None, // alternative to image: a pre-packed `.smolmachine` bundle on the host
