@@ -34,7 +34,7 @@ case class SmolMachineSpec(
     // ---- orchestration -------------------------------------------------------
     instances: Int = 1,                       // 0 = ephemeral (fresh VM per request); n = persistent pool size
     mode: String = "service",                 // "service" | "exec" | "service-via-exec"
-    runtime: String = "none",                 // "none" | "node"
+    runtime: String = "none",                 // "none" | "node" | "bun"
     hosts: Seq[String] = Seq.empty,           // per-machine smolvm host pool
     hostsUrl: Option[String] = None,
     hostsRefresh: FiniteDuration = 60.seconds,
@@ -64,7 +64,7 @@ object SmolMachineSpec {
   val default = SmolMachineSpec()
 
   private val validModes    = Set("service", "exec", "service-via-exec")
-  private val validRuntimes  = Set("none", "node")
+  private val validRuntimes  = Set("none", "node", "bun")
 
   val format: Format[SmolMachineSpec] = new Format[SmolMachineSpec] {
 
