@@ -42,7 +42,8 @@
             label: 'Runtime',
             possibleValues: [
               { value: 'none', label: 'none' },
-              { value: 'node', label: 'node (node:22-alpine RPC: run / npm / npx)' },
+              { value: 'node', label: 'node (node:22-alpine — run / npm / npx)' },
+              { value: 'bun', label: 'bun (oven/bun:latest — run / bun add / bunx)' },
             ],
           },
         },
@@ -65,7 +66,7 @@
         'spec.env': { type: 'object', props: { label: 'Env. variables' } },
         'spec.workdir': { type: 'string', props: { label: 'Working directory' } },
 
-        'spec.code': { type: 'monaco', props: { label: 'Inline node code', language: 'javascript', height: 400, help: 'runtime=node: when set, runs `node <code file>` instead of exec/launch command' } },
+        'spec.code': { type: 'monaco', props: { label: 'Inline code', language: 'javascript', height: 400, help: 'runtime=node/bun: when set, runs `<runtime> <code file>` instead of exec/launch command' } },
         'spec.code_file': { type: 'string', props: { label: 'Code file path', placeholder: '/app/index.js' } },
         'spec.dependencies': { type: 'array', props: { label: 'npm dependencies', placeholder: 'lodash', help: 'npm install-ed once at provisioning before the code runs' } },
 
@@ -93,7 +94,7 @@
         'spec.service_port', 'spec.readiness_path', 'spec.readiness_timeout', 'spec.launch_command',
         '>>>Exec',
         'spec.exec_command', 'spec.env', 'spec.workdir',
-        '>>>Node inline code (runtime=node)',
+        '>>>Inline code (runtime=node/bun)',
         'spec.code', 'spec.code_file', 'spec.dependencies',
         '>>>Timeouts',
         'spec.boot_timeout', 'spec.request_timeout', 'spec.idle_timeout',
