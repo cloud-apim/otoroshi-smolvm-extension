@@ -66,12 +66,12 @@ class SmolMachineExtension(val env: Env) extends AdminExtension {
         override def run(): Unit = {
           val isLeader = env.clusterConfig.mode == ClusterMode.Off || env.clusterConfig.mode.isLeader
           if (isLeader) {
-            states.allSmolMachines().foreach(m => manager.reap(m))
+            states.allSmolMachines().foreach(m => manager.reconcile(m))
           }
         }
       })(ec)
       reaperRef.set(cancellable)
-      SmolMachineExtension.logger.info(s"[smolmachine] idle/orphan reaper scheduled every $interval (leader only)")
+      SmolMachineExtension.logger.info(s"[smolmachine] reconciler (idle GC + dead/orphan cleanup) scheduled every $interval (leader only)")
     }
   }
 
