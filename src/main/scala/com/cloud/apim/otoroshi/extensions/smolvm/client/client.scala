@@ -1,6 +1,7 @@
-package otoroshi_plugins.com.cloud.apim.plugins.smolvm
+package com.cloud.apim.otoroshi.extensions.smolvm.client
 
 import akka.util.ByteString
+import com.cloud.apim.otoroshi.extensions.smolvm.entities.{ExecRequest, ExecResponse, SmolMachineSpecV1}
 import otoroshi.env.Env
 import play.api.Logger
 import play.api.libs.json.Json
@@ -38,7 +39,7 @@ class SmolVmClient(env: Env) {
       .map(r => r.status >= 200 && r.status < 500)
       .recover { case _ => false }
 
-  def createMachine(host: String, spec: SmolMachineSpec, timeout: FiniteDuration)(implicit
+  def createMachine(host: String, spec: SmolMachineSpecV1, timeout: FiniteDuration)(implicit
       ec: ExecutionContext
   ): Future[Either[String, Unit]] =
     env.Ws
