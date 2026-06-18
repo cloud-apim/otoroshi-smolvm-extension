@@ -66,9 +66,6 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
   private val portBase  = 20000
   private val portRange = 20000
   private val lockTtlMs  = 60000L
-  // service-via-exec keeps the launching exec connection open for the server's lifetime (until the VM is
-  // deleted/reaped). play-ws caps a request timeout at Int.MaxValue ms (~24.8 days), so use just under that.
-  private val serverExecTimeout = 2000000000.millis
 
   // local counters for the ephemeral path (instances = 0): no external state needed
   private val ephemeralHostCounter = new AtomicInteger(0)
@@ -385,21 +382,7 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
     def launchAndReady(): Future[Either[String, InstanceRecord]] = {
     val launchF: Future[Either[String, Boolean]] = (spec.mode, effectiveCommand(spec, spec.launchCommand)) match {
       case ("service-via-exec", Some(cmd)) if cmd.nonEmpty =>
-        // Run the server in the FOREGROUND of an exec connection we keep open (fire-and-forget):
-        // a backgrounded process (`nohup`/`setsid` + `&`) gets reaped when smolvm closes the exec.
-        // The server lives as long as this connection is open; it dies when the VM is deleted/reaped.
-        // A heartbeat on stdout every 60s prevents the play-ws read timeout (120s) from closing an
-        // otherwise-idle connection (server output goes to a file, not the connection).
-        val sh = s"(while true; do echo __smolvm_keepalive__; sleep 60; done) & ${cmd.mkString(" ")} > /tmp/smolvm-server.log 2>&1"
-        logger.info(s"[$name] launching server (foreground, kept-open exec): ${cmd.mkString(" ")}")
-        client.exec(host, name, ExecRequest(Seq("sh", "-c", sh), None, spec.env.toSeq, spec.workdir, None), serverExecTimeout)
-          .onComplete { res =>
-            // the connection closing means the server is gone; release the instance so otoroshi
-            // state matches smolvm (next request re-provisions a fresh one)
-            logger.warn(s"[$name] server exec connection ended ($res) — releasing instance to keep state in sync")
-            releaseInstance(machine.id, slot, host, name)
-          }
-        Future.successful(Right(true))
+        launchServerDetached(host, name, cmd, spec)
       case ("service-via-exec", _)                          =>
         Future.successful(Left("mode 'service-via-exec' requires a non-empty launch_command (or spec.code)"))
       case _                                                =>
@@ -442,6 +425,22 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
     }
   }
 
+  /**
+   * Start the server with smolvm's native `background` exec: smolvm spawns it detached and returns
+   * immediately; the process keeps running until it exits or the machine stops. No connection is held
+   * open by otoroshi. Output is redirected to a file so the readiness-failure diagnostic can read it.
+   * Idempotent enough: if a server is already bound to the port, the relaunched process just fails to
+   * bind and exits, leaving the existing one serving.
+   */
+  private def launchServerDetached(host: String, name: String, cmd: Seq[String], spec: SmolMachineSpec)(implicit ec: ExecutionContext): Future[Either[String, Boolean]] = {
+    val sh = s"${cmd.mkString(" ")} > /tmp/smolvm-server.log 2>&1"
+    logger.info(s"[$name] launching background server: ${cmd.mkString(" ")}")
+    client.exec(host, name, ExecRequest(Seq("sh", "-c", sh), None, spec.env.toSeq, spec.workdir, None, background = true), 30.seconds).map {
+      case Left(err) => Left(s"launch_command failed: $err")
+      case Right(_)  => Right(true)
+    }
+  }
+
   /** best-effort tail of the service-via-exec server log, for diagnostics on readiness failure */
   private def serverLogTail(host: String, name: String)(implicit ec: ExecutionContext): Future[String] =
     client.exec(host, name, ExecRequest(Seq("sh", "-c", "tail -n 30 /tmp/smolvm-server.log 2>/dev/null || true"), None, Seq.empty, None, Some(10L)), 15.seconds)
@@ -459,6 +458,20 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
   // ---- routing --------------------------------------------------------------
 
   private def runProxy(rec: InstanceRecord, spec: SmolMachineSpec, inv: SmolInvocation)(implicit ec: ExecutionContext): Future[InvokeResult] = {
+    proxyOnce(rec, spec, inv).flatMap {
+      // a transport failure on a service-via-exec instance likely means the detached server died;
+      // relaunch it (no held connection) and retry once before giving up
+      case f @ InvokeResult.Failed(_, _) if spec.mode == "service-via-exec" =>
+        logger.warn(s"[${rec.name}] proxy failed — relaunching the server and retrying once")
+        relaunchAndWait(rec, spec).flatMap {
+          case true  => proxyOnce(rec, spec, inv)
+          case false => Future.successful(f)
+        }
+      case other => Future.successful(other)
+    }
+  }
+
+  private def proxyOnce(rec: InstanceRecord, spec: SmolMachineSpec, inv: SmolInvocation)(implicit ec: ExecutionContext): Future[InvokeResult] = {
     val target     = serviceBaseUrl(rec.host, rec.hostPort) + inv.relativeUri
     val fwdHeaders = inv.headers.filterNot { case (k, _) =>
       k.equalsIgnoreCase("Host") || k.equalsIgnoreCase("Content-Length") || k.equalsIgnoreCase("Transfer-Encoding")
@@ -471,6 +484,17 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
       InvokeResult.Failed(502, s"proxy error: ${e.getMessage}")
     }
   }
+
+  /** Relaunch the detached server for a service-via-exec instance and wait until it's ready again. */
+  private def relaunchAndWait(rec: InstanceRecord, spec: SmolMachineSpec)(implicit ec: ExecutionContext): Future[Boolean] =
+    effectiveCommand(spec, spec.launchCommand).filter(_.nonEmpty) match {
+      case None      => Future.successful(false)
+      case Some(cmd) =>
+        launchServerDetached(rec.host, rec.name, cmd, spec).flatMap {
+          case Left(_)  => Future.successful(false)
+          case Right(_) => waitReady(serviceBaseUrl(rec.host, rec.hostPort) + spec.readinessPath, System.currentTimeMillis() + spec.readinessTimeout.toMillis)
+        }
+    }
 
   private def runExec(rec: InstanceRecord, spec: SmolMachineSpec, inv: SmolInvocation)(implicit ec: ExecutionContext): Future[InvokeResult] = {
     effectiveCommand(spec, spec.execCommand).filter(_.nonEmpty) match {
@@ -490,22 +514,6 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
             }
         }.recover { case e => InvokeResult.Failed(502, s"exec error: ${e.getMessage}") }
     }
-  }
-
-  /**
-   * Release an instance: remove it from the registry (only if the slot still holds THIS instance,
-   * to avoid evicting a newer one that reused the slot) and delete its VM. Idempotent / best-effort.
-   */
-  private def releaseInstance(machineId: String, slot: Int, host: String, name: String)(implicit ec: ExecutionContext): Unit = {
-    if (slot >= 0) {
-      state.hgetAll(instancesKey(machineId)).foreach { m =>
-        m.get(slot.toString).flatMap(InstanceRecord.parse) match {
-          case Some(rec) if rec.name == name => state.hdel(instancesKey(machineId), slot.toString)
-          case _                             => ()
-        }
-      }
-    }
-    client.delete(host, name, 15.seconds)
   }
 
   // ---- reconciler (idle GC + dead cleanup + orphan GC) ---------------------
