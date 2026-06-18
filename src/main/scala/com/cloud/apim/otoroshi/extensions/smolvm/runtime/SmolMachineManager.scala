@@ -9,9 +9,10 @@ import play.api.Logger
 import play.api.libs.json._
 
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future}
-import scala.util.Try
+import scala.util.{Failure, Success, Try}
 
 /** One live instance of a SmolMachine, recorded in the external placement state. */
 case class InstanceRecord(
@@ -63,6 +64,10 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
   private val portBase  = 20000
   private val portRange = 20000
   private val lockTtlMs  = 60000L
+
+  // local counters for the ephemeral path (instances = 0): no external state needed
+  private val ephemeralHostCounter = new AtomicInteger(0)
+  private val ephemeralPortCounter = new AtomicInteger(0)
 
   // small TTL cache for hosts fetched from a url: url -> (expiresAtMs, hosts)
   private val urlHostsCache = new ConcurrentHashMap[String, (Long, Seq[String])]()
@@ -149,16 +154,46 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
     else {
       hostsFor(spec).flatMap { hosts =>
         if (hosts.isEmpty) Future.successful(InvokeResult.Failed(502, "no smolvm host available (check spec.hosts / spec.hosts_url)"))
+        else if (spec.instances <= 0) invokeEphemeral(machine, hosts, inv)
         else resolveInstance(machine, hosts).flatMap {
           case Left(err)  => Future.successful(InvokeResult.Failed(502, s"could not get a smolvm instance: $err"))
-          case Right(rec) =>
-            if (isNodeRpc(spec)) NodeRuntime.handle(client, rec.host, rec.name, spec, inv)
-            else if (isProxyMode(spec)) runProxy(rec, spec, inv)
-            else runExec(rec, spec, inv)
+          case Right(rec) => route(machine, rec, inv)
         }
       }
     }
   }
+
+  /** Dispatch a request to a (ready) instance based on mode/runtime. */
+  private def route(machine: SmolMachine, rec: InstanceRecord, inv: SmolInvocation)(implicit ec: ExecutionContext): Future[InvokeResult] = {
+    val spec = machine.spec
+    if (isNodeRpc(spec)) NodeRuntime.handle(client, rec.host, rec.name, spec, inv)
+    else if (isProxyMode(spec)) runProxy(rec, spec, inv)
+    else runExec(rec, spec, inv)
+  }
+
+  // ---- ephemeral path (instances = 0): one fresh micro-VM per request, torn down after ----
+
+  private def ephemeralName(machineId: String, snowflake: String): String =
+    s"otoroshi-smol-${sanitize(machineId)}-${sanitize(snowflake)}".replaceAll("-+", "-").stripPrefix("-").stripSuffix("-").take(60)
+
+  private def invokeEphemeral(machine: SmolMachine, hosts: Seq[String], inv: SmolInvocation)(implicit ec: ExecutionContext): Future[InvokeResult] = {
+    val spec        = machine.spec
+    val name        = ephemeralName(machine.id, inv.snowflake)
+    val host        = hosts(floorMod(ephemeralHostCounter.getAndIncrement().toLong, hosts.size))
+    val hostPortOpt = if (isProxyMode(spec)) Some(portBase + floorMod(ephemeralPortCounter.getAndIncrement().toLong, portRange)) else None
+    logger.info(s"[$name] ephemeral invoke on $host mode=${spec.mode} runtime=${spec.runtime}")
+    createAndBringUp(machine, host, name, -1, hostPortOpt).flatMap {
+      case Left(err)  => Future.successful(InvokeResult.Failed(502, s"could not provision ephemeral micro-VM: $err"))
+      case Right(rec) => route(machine, rec, inv).andThen { case _ => deleteQuietly(host, name) }
+    }
+  }
+
+  private def deleteQuietly(host: String, name: String)(implicit ec: ExecutionContext): Unit =
+    client.delete(host, name, 15.seconds).onComplete {
+      case Success(Right(_))  => logger.info(s"[$name] ephemeral machine deleted (teardown done)")
+      case Success(Left(err)) => logger.warn(s"[$name] could not delete ephemeral machine on $host: $err")
+      case Failure(e)         => logger.warn(s"[$name] could not delete ephemeral machine on $host: ${e.getMessage}")
+    }
 
   /** Serve from a ready instance if any (and grow in background), else cold-start one. */
   private def resolveInstance(machine: SmolMachine, hosts: Seq[String])(implicit ec: ExecutionContext): Future[Either[String, InstanceRecord]] = {
@@ -234,6 +269,7 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
     )
   }
 
+  /** Pooled provisioning: pick host/port, bring the VM up, then record it in the registry. */
   private def provisionSlot(machine: SmolMachine, hosts: Seq[String], slot: Int)(implicit ec: ExecutionContext): Future[Either[String, InstanceRecord]] = {
     val spec = machine.spec
     val name = instanceName(machine.id, slot)
@@ -241,33 +277,42 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
       val host = hosts(floorMod(rr, hosts.size))
       val portF: Future[Option[Int]] = if (isProxyMode(spec)) nextPort().map(Some(_)) else Future.successful(None)
       portF.flatMap { hostPortOpt =>
-        val body = buildCreateBody(spec, name, hostPortOpt)
-        logger.info(s"[$name] provisioning slot=$slot on $host mode=${spec.mode} runtime=${spec.runtime}${hostPortOpt.fold("")(p => s" port=$p->${spec.servicePort}")}")
-        client.createMachine(host, body, spec.bootTimeout).flatMap {
-          case Left(err) =>
-            logger.warn(s"[$name] create failed on $host: $err")
-            client.delete(host, name, 15.seconds)
-            Future.successful(Left(err))
-          case Right(_)  =>
-            client.start(host, name, spec.bootTimeout).flatMap {
-              case Left(err) =>
-                logger.warn(s"[$name] start failed on $host: $err")
-                client.delete(host, name, 15.seconds)
-                Future.successful(Left(err))
-              case Right(_)  =>
-                finishProvision(machine, host, name, slot, hostPortOpt)
-            }
-        }.recover { case e =>
-          logger.error(s"[$name] provisioning error on $host: ${e.getMessage}")
-          client.delete(host, name, 15.seconds)
-          Left(e.getMessage)
+        createAndBringUp(machine, host, name, slot, hostPortOpt).flatMap {
+          case Right(rec) => storeInstance(machine.id, rec).map(_ => Right(rec))
+          case left       => Future.successful(left)
         }
       }
     }
   }
 
+  /** create -> start -> bring up (launch + readiness). Does NOT touch the registry; returns the record. */
+  private def createAndBringUp(machine: SmolMachine, host: String, name: String, slot: Int, hostPortOpt: Option[Int])(implicit ec: ExecutionContext): Future[Either[String, InstanceRecord]] = {
+    val spec = machine.spec
+    val body = buildCreateBody(spec, name, hostPortOpt)
+    logger.info(s"[$name] provisioning on $host mode=${spec.mode} runtime=${spec.runtime}${hostPortOpt.fold("")(p => s" port=$p->${spec.servicePort}")}")
+    client.createMachine(host, body, spec.bootTimeout).flatMap {
+      case Left(err) =>
+        logger.warn(s"[$name] create failed on $host: $err")
+        client.delete(host, name, 15.seconds)
+        Future.successful(Left(err))
+      case Right(_)  =>
+        client.start(host, name, spec.bootTimeout).flatMap {
+          case Left(err) =>
+            logger.warn(s"[$name] start failed on $host: $err")
+            client.delete(host, name, 15.seconds)
+            Future.successful(Left(err))
+          case Right(_)  =>
+            bringUp(machine, host, name, slot, hostPortOpt)
+        }
+    }.recover { case e =>
+      logger.error(s"[$name] provisioning error on $host: ${e.getMessage}")
+      client.delete(host, name, 15.seconds)
+      Left(e.getMessage)
+    }
+  }
+
   /** service-via-exec: launch the server; service: nothing; then wait for readiness on proxy modes. */
-  private def finishProvision(machine: SmolMachine, host: String, name: String, slot: Int, hostPortOpt: Option[Int])(implicit ec: ExecutionContext): Future[Either[String, InstanceRecord]] = {
+  private def bringUp(machine: SmolMachine, host: String, name: String, slot: Int, hostPortOpt: Option[Int])(implicit ec: ExecutionContext): Future[Either[String, InstanceRecord]] = {
     val spec = machine.spec
 
     def record(serverLaunched: Boolean): InstanceRecord = {
@@ -305,12 +350,10 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
               client.delete(host, name, 15.seconds)
               Future.successful(Left(s"instance did not become ready within ${spec.readinessTimeout}"))
             case true  =>
-              val rec = record(serverLaunched)
-              storeInstance(machine.id, rec).map(_ => Right(rec))
+              Future.successful(Right(record(serverLaunched)))
           }
         } else {
-          val rec = record(serverLaunched)
-          storeInstance(machine.id, rec).map(_ => Right(rec))
+          Future.successful(Right(record(serverLaunched)))
         }
     }
   }
