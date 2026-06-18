@@ -8,6 +8,7 @@ import otoroshi.env.Env
 import play.api.Logger
 import play.api.libs.json._
 
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import scala.concurrent.duration._
@@ -88,7 +89,16 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
     s"otoroshi-smol-${sanitize(machineId)}-$slot".replaceAll("-+", "-").stripPrefix("-").stripSuffix("-")
 
   private def isProxyMode(spec: SmolMachineSpec): Boolean = spec.mode == "service" || spec.mode == "service-via-exec"
-  private def isNodeRpc(spec: SmolMachineSpec): Boolean   = spec.runtime == "node" && spec.mode == "exec"
+  private def hasInlineCode(spec: SmolMachineSpec): Boolean = spec.runtime == "node" && spec.code.exists(_.trim.nonEmpty)
+  // node RPC only when there is no inline code (inline code overrides the command instead)
+  private def isNodeRpc(spec: SmolMachineSpec): Boolean   = spec.runtime == "node" && spec.mode == "exec" && !hasInlineCode(spec)
+
+  private def nodeCodePath(spec: SmolMachineSpec): String = if (spec.codeFile.startsWith("/")) spec.codeFile else s"/${spec.codeFile}"
+  private def parentDir(path: String): String = { val i = path.lastIndexOf('/'); if (i <= 0) "/" else path.substring(0, i) }
+
+  /** Inline node code overrides exec_command / launch_command with `node <codeFile>`. */
+  private def effectiveCommand(spec: SmolMachineSpec, configured: Option[Seq[String]]): Option[Seq[String]] =
+    if (hasInlineCode(spec)) Some(Seq("node", nodeCodePath(spec))) else configured
 
   // ---- host resolution ------------------------------------------------------
 
@@ -311,7 +321,45 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
     }
   }
 
-  /** service-via-exec: launch the server; service: nothing; then wait for readiness on proxy modes. */
+  /**
+   * node inline code (runtime=node + spec.code): install dependencies (once) and write the code into
+   * the VM before it is used. No-op for non-node machines or when neither code nor deps are set.
+   */
+  private def prepareNode(machine: SmolMachine, host: String, name: String)(implicit ec: ExecutionContext): Future[Either[String, Unit]] = {
+    val spec = machine.spec
+    if (spec.runtime != "node" || (spec.code.forall(_.trim.isEmpty) && spec.dependencies.isEmpty)) Future.successful(Right(()))
+    else {
+      val codePath = nodeCodePath(spec)
+      val dir      = parentDir(codePath)
+      def execOk(label: String, req: ExecRequest, timeout: FiniteDuration): Future[Either[String, Unit]] =
+        client.exec(host, name, req, timeout).map {
+          case Left(err)                    => Left(s"$label failed: $err")
+          case Right(r) if !r.success       => Left(s"$label exited ${r.exitCode}: ${r.stderr.take(300)}")
+          case Right(_)                     => Right(())
+        }
+      execOk("mkdir", ExecRequest(Seq("sh", "-c", s"mkdir -p $dir"), None, Seq.empty, None, Some(15L)), 30.seconds).flatMap {
+        case Left(e)  => Future.successful(Left(e))
+        case Right(_) =>
+          val depsF =
+            if (spec.dependencies.nonEmpty) {
+              logger.info(s"[$name] npm install ${spec.dependencies.mkString(" ")} (in $dir)")
+              execOk("npm install", ExecRequest(Seq("npm", "install") ++ spec.dependencies, None, spec.env.toSeq, Some(dir), Some(spec.bootTimeout.toSeconds)), spec.bootTimeout)
+            } else Future.successful(Right(()))
+          depsF.flatMap {
+            case Left(e)  => Future.successful(Left(e))
+            case Right(_) =>
+              spec.code.filter(_.trim.nonEmpty) match {
+                case None       => Future.successful(Right(()))
+                case Some(code) =>
+                  logger.info(s"[$name] writing inline node code to $codePath (${code.length} chars)")
+                  client.putFile(host, name, codePath, ByteString(code.getBytes(StandardCharsets.UTF_8)), spec.requestTimeout)
+              }
+          }
+      }
+    }
+  }
+
+  /** prepare node code/deps, then (service-via-exec) launch the server, then wait for readiness on proxy modes. */
   private def bringUp(machine: SmolMachine, host: String, name: String, slot: Int, hostPortOpt: Option[Int])(implicit ec: ExecutionContext): Future[Either[String, InstanceRecord]] = {
     val spec = machine.spec
 
@@ -320,7 +368,8 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
       InstanceRecord(slot, name, host, hostPortOpt.getOrElse(0), "ready", serverLaunched, now, now)
     }
 
-    val launchF: Future[Either[String, Boolean]] = (spec.mode, spec.launchCommand) match {
+    def launchAndReady(): Future[Either[String, InstanceRecord]] = {
+    val launchF: Future[Either[String, Boolean]] = (spec.mode, effectiveCommand(spec, spec.launchCommand)) match {
       case ("service-via-exec", Some(cmd)) if cmd.nonEmpty =>
         val sh = s"nohup ${cmd.mkString(" ")} > /tmp/smolvm-server.log 2>&1 &"
         logger.info(s"[$name] launching server via exec: $sh")
@@ -329,7 +378,7 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
           case Right(_)  => Right(true)
         }
       case ("service-via-exec", _)                          =>
-        Future.successful(Left("mode 'service-via-exec' requires a non-empty launch_command"))
+        Future.successful(Left("mode 'service-via-exec' requires a non-empty launch_command (or spec.code)"))
       case _                                                =>
         Future.successful(Right(false))
     }
@@ -355,6 +404,14 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
         } else {
           Future.successful(Right(record(serverLaunched)))
         }
+    }
+    }
+
+    prepareNode(machine, host, name).flatMap {
+      case Left(err) =>
+        client.delete(host, name, 15.seconds)
+        Future.successful(Left(err))
+      case Right(_)  => launchAndReady()
     }
   }
 
@@ -383,8 +440,8 @@ class SmolMachineManager(env: Env, state: SmolStateBackend) {
   }
 
   private def runExec(rec: InstanceRecord, spec: SmolMachineSpec, inv: SmolInvocation)(implicit ec: ExecutionContext): Future[InvokeResult] = {
-    spec.execCommand.filter(_.nonEmpty) match {
-      case None          => Future.successful(InvokeResult.Failed(500, "exec_command is required for 'exec' mode"))
+    effectiveCommand(spec, spec.execCommand).filter(_.nonEmpty) match {
+      case None          => Future.successful(InvokeResult.Failed(500, "exec_command (or spec.code) is required for 'exec' mode"))
       case Some(command) =>
         val b64      = java.util.Base64.getEncoder.encodeToString(inv.bodyBytes.toArray)
         val envelope = ExecEnvelope.requestJson(inv.method, inv.path, inv.query, inv.headers, b64)
