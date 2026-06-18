@@ -1,0 +1,65 @@
+package com.cloud.apim.otoroshi.extensions.smolvm
+
+import com.cloud.apim.otoroshi.extensions.smolvm.entities.{SmolMachine, SmolMachineSpec, SmolMount, SmolPort}
+import com.cloud.apim.otoroshi.extensions.smolvm.runtime.InstanceRecord
+import play.api.libs.json.Json
+
+import scala.concurrent.duration._
+
+class EntitiesSpec extends munit.FunSuite {
+
+  test("SmolMachineSpec JSON round-trips (snake_case + ms durations)") {
+    val spec = SmolMachineSpec(
+      image = "node:22-alpine",
+      cpus = 4,
+      memoryMb = 1024,
+      storageGb = Some(40),
+      network = true,
+      allowCidrs = Seq("10.0.0.0/8"),
+      mounts = Seq(SmolMount("/h", "/g", readonly = true)),
+      ports = Seq(SmolPort(18080, 8080)),
+      instances = 3,
+      mode = "service-via-exec",
+      runtime = "node",
+      hosts = Seq("http://127.0.0.1:8080"),
+      readinessTimeout = 12.seconds,
+      launchCommand = Some(Seq("node", "/app/server.js")),
+      idleTimeout = 2.minutes
+    )
+    val parsed = SmolMachineSpec.format.reads(spec.json).get
+    assertEquals(parsed, spec)
+    assertEquals((spec.json \ "readiness_timeout").as[Long], 12000L)
+    assertEquals((spec.json \ "mode").as[String], "service-via-exec")
+  }
+
+  test("SmolMachineSpec clamps instances to >= 1 and validates mode/runtime") {
+    val j = Json.obj("image" -> "alpine", "instances" -> 0, "mode" -> "bogus", "runtime" -> "weird")
+    val s = SmolMachineSpec.format.reads(j).get
+    assertEquals(s.instances, 1)
+    assertEquals(s.mode, "service")
+    assertEquals(s.runtime, "none")
+  }
+
+  test("SmolMachine entity JSON round-trips with embedded spec") {
+    val m = SmolMachine(
+      id = "smol-machine_1",
+      name = "demo",
+      description = "d",
+      tags = Seq("a", "b"),
+      metadata = Map("k" -> "v"),
+      spec = SmolMachineSpec(image = "node:22-alpine", instances = 2)
+    )
+    val parsed = SmolMachine.format.reads(m.json).get
+    assertEquals(parsed.id, "smol-machine_1")
+    assertEquals(parsed.name, "demo")
+    assertEquals(parsed.tags, Seq("a", "b"))
+    assertEquals(parsed.spec.image, "node:22-alpine")
+    assertEquals(parsed.spec.instances, 2)
+  }
+
+  test("InstanceRecord JSON round-trips") {
+    val rec    = InstanceRecord(2, "otoroshi-smol-x-2", "http://h:8080", 20002, "ready", serverLaunched = true, 1L, 2L)
+    val parsed = InstanceRecord.parse(Json.stringify(rec.json)).get
+    assertEquals(parsed, rec)
+  }
+}
