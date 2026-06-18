@@ -32,7 +32,7 @@ case class SmolMachineSpec(
     mounts: Seq[SmolMount] = Seq.empty,
     ports: Seq[SmolPort] = Seq.empty,
     // ---- orchestration -------------------------------------------------------
-    instances: Int = 1,                       // pool size, 1..n (clamped to >= 1)
+    instances: Int = 1,                       // 0 = ephemeral (fresh VM per request); n = persistent pool size
     mode: String = "service",                 // "service" | "exec" | "service-via-exec"
     runtime: String = "none",                 // "none" | "node"
     hosts: Seq[String] = Seq.empty,           // per-machine smolvm host pool
@@ -119,7 +119,7 @@ object SmolMachineSpec {
         allowCidrs = (json \ "allow_cidrs").asOpt[Seq[String]].getOrElse(Seq.empty),
         mounts = (json \ "mounts").asOpt[Seq[JsValue]].getOrElse(Seq.empty).flatMap(parseMount),
         ports = (json \ "ports").asOpt[Seq[JsValue]].getOrElse(Seq.empty).flatMap(parsePort),
-        instances = math.max(1, (json \ "instances").asOpt[Int].getOrElse(1)),
+        instances = math.max(0, (json \ "instances").asOpt[Int].getOrElse(1)), // 0 = ephemeral (VM per request)
         mode = mode,
         runtime = runtime,
         hosts = (json \ "hosts").asOpt[Seq[String]].getOrElse(Seq.empty),
