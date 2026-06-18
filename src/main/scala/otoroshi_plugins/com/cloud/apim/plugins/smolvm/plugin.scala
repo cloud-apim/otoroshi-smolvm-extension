@@ -211,7 +211,7 @@ class SmolVmFunctionBackend extends NgBackendCall {
   override def multiInstance: Boolean                      = true
   override def core: Boolean                               = false
   override def useDelegates: Boolean                       = false
-  override def name: String                                = "Cloud APIM - smolvm FaaS"
+  override def name: String                                = "Cloud APIM - smolvm FaaS (ephemeral)"
   override def description: Option[String]                 =
     "Run a function in a smolvm micro-VM (HTTP-service proxy or stdin/stdout exec) and return its response".some
   override def defaultConfigObject: Option[NgPluginConfig] = SmolVmFunctionConfig.default.some
