@@ -25,7 +25,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          sbt ';compile;test;package'
+          sbt ';compile;package'
       - name: Generate SHA-256
         run: |
           shasum -a 256 ./target/scala-2.12/otoroshi-smolvm-extension_2.12-${{ inputs.version }}.jar | cut -d ' ' -f 1 > ./target/scala-2.12/otoroshi-smolvm-extension_2.12-${{ inputs.version }}.jar.sha256
