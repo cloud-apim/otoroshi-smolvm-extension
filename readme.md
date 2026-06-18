@@ -99,18 +99,20 @@ Then add the plugin to a route's `plugins` array:
 `exec` envelope — stdin (request): `{"method","path","query","headers","body_base64"}` ·
 stdout (response): `{"status","headers","body_base64"}` (or `"body"` for plain text).
 
-## Node.js runtime
+## JavaScript runtimes (Node & Bun)
 
-Set `runtime: node` to use a `node:22-alpine` machine.
+Set `runtime: node` (image `node:22-alpine`) or `runtime: bun` (image `oven/bun:latest`). Both
+expose the same endpoints and inline-code behaviour; only the underlying commands differ
+(`node`/`npm`/`npx` vs `bun`/`bun add`/`bunx`).
 
 **On-demand (RPC).** The request path selects the operation:
 
 ```bash
-curl -X POST https://route/run         -d '{"code":"console.log(40+2)"}'   # node -e  -> {"exitCode":0,"stdout":"42\n"}
+curl -X POST https://route/run         -d '{"code":"console.log(40+2)"}'   # node -e / bun -e  -> {"exitCode":0,"stdout":"42\n"}
 curl -X POST https://route/eval        -d '{"expression":"1+2+3"}'
 curl -X POST https://route/run-file    -d '{"path":"/app/x.js"}'
-curl -X POST https://route/npm/install -d '{"packages":["lodash"]}'
-curl -X POST https://route/npx         -d '{"args":["cowsay","hi"]}'
+curl -X POST https://route/npm/install -d '{"packages":["lodash"]}'         # node: npm install · bun: bun add
+curl -X POST https://route/npx         -d '{"args":["cowsay","hi"]}'        # node: npx · bun: bunx
 curl -X PUT  https://route/files/app.js --data-binary @app.js
 curl        https://route/version
 ```
@@ -162,7 +164,7 @@ Durations are in **milliseconds**.
 | `from` | – | Alternative to `image`: a pre-packed `.smolmachine` bundle on the host. |
 | `instances` | `1` | `0` = ephemeral (VM per request); `n` = warm pool size. |
 | `mode` | `service` | `service` · `exec` · `service-via-exec`. |
-| `runtime` | `none` | `none` · `node`. |
+| `runtime` | `none` | `none` · `node` · `bun`. |
 | `hosts` | `[]` | smolvm hosts for this machine (`http://host:8080`). |
 | `hosts_url` | – | URL returning a JSON array of hosts. |
 | `network` | `false` | Allow outbound network from the VM. |
@@ -174,7 +176,7 @@ Durations are in **milliseconds**.
 | `readiness_path` / `readiness_timeout` | `/` / `10000` | (service) readiness probe. |
 | `launch_command` | – | (service-via-exec) command that starts the server. |
 | `exec_command` | – | (exec) command that reads stdin / writes stdout. |
-| `code` / `code_file` / `dependencies` | – / `/app/index.js` / `[]` | (node) inline JS, where to write it, npm packages. |
+| `code` / `code_file` / `dependencies` | – / `/app/index.js` / `[]` | (node/bun) inline JS, where to write it, packages to install. |
 | `env` / `workdir` | `{}` / – | Environment variables / working directory for commands. |
 | `boot_timeout` / `request_timeout` | `60000` / `30000` | Provisioning / invocation timeouts. |
 | `idle_timeout` | `300000` | Pooled VMs idle longer than this are recycled. |
