@@ -48,7 +48,7 @@
         },
 
         'spec.hosts': { type: 'array', props: { label: 'smolvm hosts', placeholder: 'http://host:8080' } },
-        'spec.hosts_url': { type: 'string', props: { label: 'Hosts URL (JSON array)' } },
+        'spec.hosts_url': { type: 'string', props: { label: 'Hosts Pool URL' } },
         'spec.network': { type: 'bool', props: { label: 'Network enabled (outbound)' } },
         'spec.allow_cidrs': { type: 'array', props: { label: 'Egress allowed CIDRs' } },
         'spec.cpus': { type: 'number', props: { label: 'vCPUs' } },
