@@ -10,7 +10,7 @@ lazy val root = (project in file("."))
     name := "otoroshi-smolvm-extension",
     resolvers += "jitpack" at "https://jitpack.io",
     libraryDependencies ++= Seq(
-      "fr.maif" %% "otoroshi" % "17.16.0" % "provided",
+      "fr.maif" %% "otoroshi" % "17.17.0" % "provided",
       munit % Test
     )
   )
