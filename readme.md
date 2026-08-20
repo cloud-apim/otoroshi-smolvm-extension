@@ -46,7 +46,7 @@ Build the jar and drop it on Otoroshi's classpath:
 
 ```bash
 sbt package
-# target/scala-2.12/otoroshi-smolvm-extension_2.12-<version>.jar
+# target/scala-3.8.4/otoroshi-smolvm-extension_3-<version>.jar
 ```
 
 Enable the extension (config file or environment):

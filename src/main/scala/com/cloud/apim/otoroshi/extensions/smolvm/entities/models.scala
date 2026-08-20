@@ -1,6 +1,6 @@
 package com.cloud.apim.otoroshi.extensions.smolvm.entities
 
-import play.api.libs.json._
+import play.api.libs.json.*
 
 import scala.util.{Failure, Success, Try}
 
@@ -8,6 +8,21 @@ import scala.util.{Failure, Success, Try}
  * Models mirroring the smolvm local HTTP API (`/api/v1`), validated against the
  * OpenAPI of smolvm 1.0.4 (`smolvm serve openapi`). See SPEC.md §2.
  */
+
+/**
+ * Conditional JSON field helpers: the smolvm API distinguishes "field absent" from
+ * "field null / empty", so optional and empty fields must simply not be emitted.
+ */
+extension (obj: JsObject) {
+
+  /** Add `key -> value` only when the option is defined. */
+  private[entities] def addOpt[A: Writes](key: String, value: Option[A]): JsObject =
+    value.fold(obj)(v => obj ++ Json.obj(key -> Json.toJson(v)))
+
+  /** Add `key -> value` only when the condition holds. */
+  private[entities] def addWhen[A: Writes](cond: Boolean)(key: String, value: => A): JsObject =
+    if (cond) obj ++ Json.obj(key -> Json.toJson(value)) else obj
+}
 
 /** Item of `mounts` in CreateMachineRequest (MountSpec). */
 case class SmolMount(source: String, target: String, readonly: Boolean = false) {
@@ -35,20 +50,19 @@ case class SmolMachineSpecV1(
     mounts: Seq[SmolMount] = Seq.empty,
     ports: Seq[SmolPort] = Seq.empty
 ) {
-  def json: JsValue = {
-    var o = Json.obj("name" -> name, "network" -> network, "gpu" -> gpu)
-    if (image.nonEmpty) o = o ++ Json.obj("image" -> image)
-    from.foreach(v => o = o ++ Json.obj("from" -> v))
-    cpus.foreach(v => o = o ++ Json.obj("cpus" -> v))
-    memoryMb.foreach(v => o = o ++ Json.obj("memoryMb" -> v))
-    storageGb.foreach(v => o = o ++ Json.obj("storageGb" -> v))
-    overlayGb.foreach(v => o = o ++ Json.obj("overlayGb" -> v))
-    networkBackend.foreach(v => o = o ++ Json.obj("networkBackend" -> v))
-    if (allowedCidrs.nonEmpty) o = o ++ Json.obj("allowedCidrs" -> allowedCidrs)
-    if (mounts.nonEmpty) o = o ++ Json.obj("mounts" -> JsArray(mounts.map(_.json)))
-    if (ports.nonEmpty) o = o ++ Json.obj("ports" -> JsArray(ports.map(_.json)))
-    o
-  }
+  def json: JsValue =
+    Json
+      .obj("name" -> name, "network" -> network, "gpu" -> gpu)
+      .addWhen(image.nonEmpty)("image", image)
+      .addOpt("from", from)
+      .addOpt("cpus", cpus)
+      .addOpt("memoryMb", memoryMb)
+      .addOpt("storageGb", storageGb)
+      .addOpt("overlayGb", overlayGb)
+      .addOpt("networkBackend", networkBackend)
+      .addWhen(allowedCidrs.nonEmpty)("allowedCidrs", allowedCidrs)
+      .addWhen(mounts.nonEmpty)("mounts", JsArray(mounts.map(_.json)))
+      .addWhen(ports.nonEmpty)("ports", JsArray(ports.map(_.json)))
 }
 
 /** Body of `POST /api/v1/machines/:name/exec`. `stdin` is supported by smolvm 1.0.4. */
@@ -60,16 +74,14 @@ case class ExecRequest(
     timeoutSecs: Option[Long] = None,
     background: Boolean = false // smolvm native: spawn detached, return immediately; runs until it exits or the machine stops
 ) {
-  def json: JsValue = {
-    var o = Json.obj("command" -> command)
-    stdin.foreach(v => o = o ++ Json.obj("stdin" -> v))
-    if (env.nonEmpty)
-      o = o ++ Json.obj("env" -> JsArray(env.map { case (k, v) => Json.obj("name" -> k, "value" -> v) }))
-    workdir.foreach(v => o = o ++ Json.obj("workdir" -> v))
-    timeoutSecs.foreach(v => o = o ++ Json.obj("timeoutSecs" -> v))
-    if (background) o = o ++ Json.obj("background" -> true)
-    o
-  }
+  def json: JsValue =
+    Json
+      .obj("command" -> command)
+      .addOpt("stdin", stdin)
+      .addWhen(env.nonEmpty)("env", JsArray(env.map { case (k, v) => Json.obj("name" -> k, "value" -> v) }))
+      .addOpt("workdir", workdir)
+      .addOpt("timeoutSecs", timeoutSecs)
+      .addWhen(background)("background", true)
 }
 
 /** Response of `POST /api/v1/machines/:name/exec` (ExecResponse: exitCode/stdout/stderr). */

@@ -4,7 +4,7 @@ import com.cloud.apim.otoroshi.extensions.smolvm.entities.{SmolMachine, SmolMach
 import com.cloud.apim.otoroshi.extensions.smolvm.runtime.InstanceRecord
 import play.api.libs.json.Json
 
-import scala.concurrent.duration._
+import scala.concurrent.duration.*
 
 class EntitiesSpec extends munit.FunSuite {
 

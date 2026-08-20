@@ -1,16 +1,16 @@
 package otoroshi_plugins.com.cloud.apim.otoroshi.extensions.smolvm.plugins
 
-import akka.stream.Materializer
-import akka.util.ByteString
 import com.cloud.apim.otoroshi.extensions.smolvm.client.{InvokeResult, SmolInvocation}
+import org.apache.pekko.stream.Materializer
+import org.apache.pekko.util.ByteString
 import otoroshi.env.Env
 import otoroshi.gateway.Errors
-import otoroshi.next.plugins.api._
+import otoroshi.next.plugins.api.*
 import otoroshi.next.proxy.NgProxyEngineError
-import otoroshi.utils.syntax.implicits._
+import otoroshi.utils.syntax.implicits.*
 import otoroshi_plugins.com.cloud.apim.otoroshi.extensions.smolvm.SmolMachineExtension
 import play.api.Logger
-import play.api.libs.json._
+import play.api.libs.json.*
 import play.api.mvc.Results
 
 import scala.concurrent.{ExecutionContext, Future}
@@ -27,9 +27,9 @@ case class SmolMachineBackendConfig(ref: String = "") extends NgPluginConfig {
 
 object SmolMachineBackendConfig {
 
-  val default = SmolMachineBackendConfig()
+  val default: SmolMachineBackendConfig = SmolMachineBackendConfig()
 
-  val format: Format[SmolMachineBackendConfig] = new Format[SmolMachineBackendConfig] {
+  given format: Format[SmolMachineBackendConfig] = new Format[SmolMachineBackendConfig] {
     override def writes(o: SmolMachineBackendConfig): JsValue = Json.obj("ref" -> o.ref)
     override def reads(json: JsValue): JsResult[SmolMachineBackendConfig] = Try {
       SmolMachineBackendConfig(ref = (json \ "ref").asOpt[String].getOrElse(""))
@@ -89,7 +89,7 @@ class SmolMachineBackend extends NgBackendCall {
   override def callBackend(
       ctx: NgbBackendCallContext,
       delegates: () => Future[Either[NgProxyEngineError, BackendCallResponse]]
-  )(implicit env: Env, ec: ExecutionContext, mat: Materializer): Future[Either[NgProxyEngineError, BackendCallResponse]] = {
+  )(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Either[NgProxyEngineError, BackendCallResponse]] = {
 
     val config = ctx.cachedConfig(internalName)(SmolMachineBackendConfig.format).getOrElse(SmolMachineBackendConfig.default)
 
@@ -102,10 +102,10 @@ class SmolMachineBackend extends NgBackendCall {
     val machineOpt = extOpt.flatMap(_.smolMachine(config.ref))
 
     (extOpt, machineOpt) match {
-      case (None, _)             => fail(500, "the SmolMachine admin extension is not enabled")
-      case (_, None)             => fail(404, s"smol machine '${config.ref}' not found")
+      case (None, _)                  => fail(500, "the SmolMachine admin extension is not enabled")
+      case (_, None)                  => fail(404, s"smol machine '${config.ref}' not found")
       case (Some(ext), Some(machine)) =>
-        val req = ctx.request.copy(url = ctx.request.url.replaceAll("//", "/"))
+        val req                       = ctx.request.copy(url = ctx.request.url.replaceAll("//", "/"))
         val bodyF: Future[ByteString] =
           if (req.hasBody) req.body.runFold(ByteString.empty)(_ ++ _)
           else Future.successful(ByteString.empty)

@@ -1,17 +1,16 @@
 package com.cloud.apim.otoroshi.extensions.smolvm.client
 
-import akka.pattern.after
-import akka.stream.Materializer
-import akka.stream.scaladsl.Source
-import akka.util.ByteString
-import com.cloud.apim.otoroshi.extensions.smolvm.entities._
+import com.cloud.apim.otoroshi.extensions.smolvm.entities.*
+import org.apache.pekko.pattern.after
+import org.apache.pekko.stream.scaladsl.Source
+import org.apache.pekko.util.ByteString
 import otoroshi.env.Env
 import otoroshi_plugins.com.cloud.apim.otoroshi.extensions.smolvm.plugins.SmolVmFunctionConfig
 import play.api.Logger
-import play.api.libs.json._
+import play.api.libs.json.*
 
 import java.util.concurrent.atomic.AtomicInteger
-import scala.concurrent.duration._
+import scala.concurrent.duration.*
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.Try
 
@@ -31,11 +30,10 @@ case class SmolInvocation(
     bodyBytes: ByteString
 )
 
-sealed trait InvokeResult
-object InvokeResult {
-  case class Streamed(status: Int, headers: Map[String, String], body: Source[ByteString, _]) extends InvokeResult
-  case class Buffered(status: Int, headers: Map[String, String], body: ByteString)            extends InvokeResult
-  case class Failed(status: Int, message: String)                                             extends InvokeResult
+enum InvokeResult {
+  case Streamed(status: Int, headers: Map[String, String], body: Source[ByteString, ?])
+  case Buffered(status: Int, headers: Map[String, String], body: ByteString)
+  case Failed(status: Int, message: String)
 }
 
 /**
@@ -67,12 +65,12 @@ class SmolVmEngine(env: Env) {
   // ---- host registry --------------------------------------------------------
 
   private def parseHosts(json: JsValue): Seq[String] = json match {
-    case JsArray(values) => values.flatMap(_.asOpt[String]).map(_.trim).filter(_.nonEmpty)
+    case JsArray(values) => values.flatMap(_.asOpt[String]).map(_.trim).filter(_.nonEmpty).toSeq
     case obj: JsObject   => (obj \ "hosts").asOpt[Seq[String]].getOrElse(Seq.empty).map(_.trim).filter(_.nonEmpty)
     case _               => Seq.empty
   }
 
-  private def fetchHostsFromUrl(url: String, ttl: FiniteDuration)(implicit ec: ExecutionContext): Future[Seq[String]] = {
+  private def fetchHostsFromUrl(url: String, ttl: FiniteDuration)(using ec: ExecutionContext): Future[Seq[String]] = {
     val now = System.currentTimeMillis()
     Option(urlHostsCache.get(url)).filter(_._1 > now) match {
       case Some((_, hosts)) => Future.successful(hosts)
@@ -94,7 +92,7 @@ class SmolVmEngine(env: Env) {
     }
   }
 
-  private def hostsFor(cfg: SmolVmFunctionConfig)(implicit ec: ExecutionContext): Future[Seq[String]] = {
+  private def hostsFor(cfg: SmolVmFunctionConfig)(using ec: ExecutionContext): Future[Seq[String]] = {
     val staticHosts = cfg.hosts.map(_.trim).filter(_.nonEmpty)
     cfg.hostsUrl.filter(_.nonEmpty) match {
       case None      => Future.successful(staticHosts)
@@ -113,7 +111,7 @@ class SmolVmEngine(env: Env) {
 
   // ---- provisioning ---------------------------------------------------------
 
-  private def provision(host: String, name: String, spec: SmolMachineSpecV1, timeout: FiniteDuration)(implicit
+  private def provision(host: String, name: String, spec: SmolMachineSpecV1, timeout: FiniteDuration)(using
       ec: ExecutionContext
   ): Future[Either[String, Unit]] = {
     logger.debug(s"[$name] create on $host: ${Json.stringify(spec.json)}")
@@ -132,13 +130,13 @@ class SmolVmEngine(env: Env) {
     }
   }
 
-  private def attemptOnHosts(hosts: Seq[String], name: String, spec: SmolMachineSpecV1, timeout: FiniteDuration)(implicit
+  private def attemptOnHosts(hosts: Seq[String], name: String, spec: SmolMachineSpecV1, timeout: FiniteDuration)(using
       ec: ExecutionContext
   ): Future[Either[String, String]] = {
     val ordered = roundRobinOrder(hosts).take(math.min(hosts.size, 3)).toList
     def loop(remaining: List[String], lastErr: String): Future[Either[String, String]] = remaining match {
-      case Nil      => Future.successful(Left(lastErr))
-      case h :: t   =>
+      case Nil    => Future.successful(Left(lastErr))
+      case h :: t =>
         provision(h, name, spec, timeout).flatMap {
           case Right(_)  => Future.successful(Right(h))
           case Left(err) =>
@@ -150,7 +148,7 @@ class SmolVmEngine(env: Env) {
     loop(ordered, "no smolvm host attempted")
   }
 
-  private def deleteQuietly(host: String, name: String)(implicit ec: ExecutionContext): Unit = {
+  private def deleteQuietly(host: String, name: String)(using ec: ExecutionContext): Unit = {
     logger.debug(s"[$name] deleting machine on $host")
     client.delete(host, name, 15.seconds).onComplete {
       case scala.util.Success(Right(_))  => logger.info(s"[$name] machine deleted (teardown done)")
@@ -205,7 +203,7 @@ class SmolVmEngine(env: Env) {
     s"$scheme://$h:$port"
   }
 
-  private def waitReady(url: String, deadlineMs: Long, perTry: FiniteDuration)(implicit ec: ExecutionContext): Future[Boolean] =
+  private def waitReady(url: String, deadlineMs: Long, perTry: FiniteDuration)(using ec: ExecutionContext): Future[Boolean] =
     client.probe(url, perTry).flatMap {
       case true  => Future.successful(true)
       case false =>
@@ -217,7 +215,7 @@ class SmolVmEngine(env: Env) {
 
   private def failed(status: Int, msg: String): Future[InvokeResult] = Future.successful(InvokeResult.Failed(status, msg))
 
-  def invoke(inv: SmolInvocation, cfg: SmolVmFunctionConfig)(implicit ec: ExecutionContext, mat: Materializer): Future[InvokeResult] = {
+  def invoke(inv: SmolInvocation, cfg: SmolVmFunctionConfig)(using ec: ExecutionContext): Future[InvokeResult] = {
     if (cfg.image.trim.isEmpty) failed(500, "no image configured for this function")
     else {
       val bootStart = System.currentTimeMillis()
@@ -248,14 +246,13 @@ class SmolVmEngine(env: Env) {
     }
   }
 
-  private def runService(host: String, name: String, hostPort: Int, cfg: SmolVmFunctionConfig, inv: SmolInvocation)(implicit
-      ec: ExecutionContext,
-      mat: Materializer
+  private def runService(host: String, name: String, hostPort: Int, cfg: SmolVmFunctionConfig, inv: SmolInvocation)(using
+      ec: ExecutionContext
   ): Future[InvokeResult] = {
-    val base      = serviceBaseUrl(host, hostPort)
-    val readyUrl  = base + cfg.readinessPath
-    val deadline  = System.currentTimeMillis() + cfg.readinessTimeout.toMillis
-    val rdyStart  = System.currentTimeMillis()
+    val base     = serviceBaseUrl(host, hostPort)
+    val readyUrl = base + cfg.readinessPath
+    val deadline = System.currentTimeMillis() + cfg.readinessTimeout.toMillis
+    val rdyStart = System.currentTimeMillis()
     logger.info(s"[$name] service: waiting readiness at $readyUrl (timeout ${cfg.readinessTimeout})")
     waitReady(readyUrl, deadline, 1.second).flatMap {
       case false =>
@@ -285,9 +282,8 @@ class SmolVmEngine(env: Env) {
     }
   }
 
-  private def runExec(host: String, name: String, cfg: SmolVmFunctionConfig, inv: SmolInvocation)(implicit
-      ec: ExecutionContext,
-      mat: Materializer
+  private def runExec(host: String, name: String, cfg: SmolVmFunctionConfig, inv: SmolInvocation)(using
+      ec: ExecutionContext
   ): Future[InvokeResult] = {
     cfg.execCommand.filter(_.nonEmpty) match {
       case None          =>

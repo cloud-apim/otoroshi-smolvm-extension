@@ -5,10 +5,10 @@ import otoroshi.env.Env
 import otoroshi.models.{EntityLocation, EntityLocationSupport}
 import otoroshi.next.extensions.AdminExtensionId
 import otoroshi.storage.{BasicStore, RedisLike, RedisLikeStore}
-import otoroshi.utils.syntax.implicits._
-import play.api.libs.json._
+import otoroshi.utils.syntax.implicits.*
+import play.api.libs.json.*
 
-import scala.concurrent.duration._
+import scala.concurrent.duration.*
 import scala.util.{Failure, Success, Try}
 
 /**
@@ -61,12 +61,12 @@ case class SmolMachineSpec(
 
 object SmolMachineSpec {
 
-  val default = SmolMachineSpec()
+  val default: SmolMachineSpec = SmolMachineSpec()
 
   private val validModes    = Set("service", "exec", "service-via-exec")
-  private val validRuntimes  = Set("none", "node", "bun")
+  private val validRuntimes = Set("none", "node", "bun")
 
-  val format: Format[SmolMachineSpec] = new Format[SmolMachineSpec] {
+  given format: Format[SmolMachineSpec] = new Format[SmolMachineSpec] {
 
     override def writes(o: SmolMachineSpec): JsValue = Json.obj(
       "image"             -> o.image,
@@ -179,7 +179,7 @@ case class SmolMachine(
 
 object SmolMachine {
 
-  val format: Format[SmolMachine] = new Format[SmolMachine] {
+  given format: Format[SmolMachine] = new Format[SmolMachine] {
     override def writes(o: SmolMachine): JsValue = o.location.jsonWithKey ++ Json.obj(
       "id"          -> o.id,
       "name"        -> o.name,
@@ -198,7 +198,7 @@ object SmolMachine {
         metadata = (json \ "metadata").asOpt[Map[String, String]].getOrElse(Map.empty),
         tags = (json \ "tags").asOpt[Seq[String]].getOrElse(Seq.empty),
         enabled = (json \ "enabled").asOpt[Boolean].getOrElse(true),
-        spec = (json \ "spec").asOpt(SmolMachineSpec.format).getOrElse(SmolMachineSpec.default)
+        spec = (json \ "spec").asOpt[SmolMachineSpec].getOrElse(SmolMachineSpec.default)
       )
     } match {
       case Failure(e) => JsError(e.getMessage)
@@ -221,7 +221,7 @@ object SmolMachine {
     )
   )
 
-  def resource(env: Env, datastores: otoroshi_plugins.com.cloud.apim.otoroshi.extensions.smolvm.SmolMachineDatastores, states: otoroshi_plugins.com.cloud.apim.otoroshi.extensions.smolvm.SmolMachineState): Resource = {
+  def resource(datastores: otoroshi_plugins.com.cloud.apim.otoroshi.extensions.smolvm.SmolMachineDatastores, states: otoroshi_plugins.com.cloud.apim.otoroshi.extensions.smolvm.SmolMachineState): Resource = {
     Resource(
       "SmolMachine",
       "smol-machines",
@@ -249,8 +249,8 @@ trait SmolMachineDataStore extends BasicStore[SmolMachine]
 class KvSmolMachineDataStore(extensionId: AdminExtensionId, redisCli: RedisLike, _env: Env)
     extends SmolMachineDataStore
     with RedisLikeStore[SmolMachine] {
-  override def fmt: Format[SmolMachine]                = SmolMachine.format
-  override def redisLike(implicit env: Env): RedisLike = redisCli
-  override def key(id: String): String                = s"${_env.storageRoot}:extensions:${extensionId.cleanup}:smolmachines:$id"
-  override def extractId(value: SmolMachine): String   = value.id
+  override def fmt: Format[SmolMachine]              = SmolMachine.format
+  override def redisLike(using env: Env): RedisLike  = redisCli
+  override def key(id: String): String               = s"${_env.storageRoot}:extensions:${extensionId.cleanup}:smolmachines:$id"
+  override def extractId(value: SmolMachine): String = value.id
 }

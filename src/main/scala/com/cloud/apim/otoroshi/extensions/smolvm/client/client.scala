@@ -1,11 +1,12 @@
 package com.cloud.apim.otoroshi.extensions.smolvm.client
 
-import akka.util.ByteString
 import com.cloud.apim.otoroshi.extensions.smolvm.entities.{ExecRequest, ExecResponse, SmolMachineSpecV1}
+import org.apache.pekko.util.ByteString
 import otoroshi.env.Env
 import play.api.Logger
 import play.api.libs.json.{JsArray, JsObject, JsString, Json}
-import play.api.libs.ws.DefaultBodyWritables._
+import play.api.libs.ws.DefaultBodyWritables.*
+import play.api.libs.ws.WSBodyReadables.given
 import play.api.libs.ws.WSResponse
 
 import scala.concurrent.duration.FiniteDuration
@@ -27,11 +28,11 @@ class SmolVmClient(env: Env) {
   private def okUnit(action: String)(r: WSResponse): Either[String, Unit] = {
     logger.debug(s"smolvm $action -> HTTP ${r.status}")
     if (r.status >= 200 && r.status < 300) Right(())
-    else Left(s"$action returned ${r.status}: ${r.body.take(512)}")
+    else Left(s"$action returned ${r.status}: ${r.body[String].take(512)}")
   }
 
   /** List the machine names known to a host (GET /api/v1/machines). Used by the reconciler. */
-  def listMachines(host: String, timeout: FiniteDuration)(implicit ec: ExecutionContext): Future[Either[String, Seq[String]]] =
+  def listMachines(host: String, timeout: FiniteDuration)(using ec: ExecutionContext): Future[Either[String, Seq[String]]] =
     env.Ws
       .url(api(host, "/machines"))
       .withRequestTimeout(timeout)
@@ -48,12 +49,12 @@ class SmolVmClient(env: Env) {
             case o: JsObject => (o \ "name").asOpt[String]
             case _           => None
           })
-        } else Left(s"list machines returned ${r.status}: ${r.body.take(256)}")
+        } else Left(s"list machines returned ${r.status}: ${r.body[String].take(256)}")
       }
       .recover { case e => Left(s"list machines failed: ${e.getMessage}") }
 
   /** Liveness of a host: any non-5xx answer on the machines list. */
-  def health(host: String, timeout: FiniteDuration)(implicit ec: ExecutionContext): Future[Boolean] =
+  def health(host: String, timeout: FiniteDuration)(using ec: ExecutionContext): Future[Boolean] =
     env.Ws
       .url(api(host, "/machines"))
       .withRequestTimeout(timeout)
@@ -61,7 +62,7 @@ class SmolVmClient(env: Env) {
       .map(r => r.status >= 200 && r.status < 500)
       .recover { case _ => false }
 
-  def createMachine(host: String, spec: SmolMachineSpecV1, timeout: FiniteDuration)(implicit
+  def createMachine(host: String, spec: SmolMachineSpecV1, timeout: FiniteDuration)(using
       ec: ExecutionContext
   ): Future[Either[String, Unit]] =
     env.Ws
@@ -74,7 +75,7 @@ class SmolVmClient(env: Env) {
       .map(okUnit("create machine"))
       .recover { case e => Left(s"create machine failed: ${e.getMessage}") }
 
-  def start(host: String, name: String, timeout: FiniteDuration)(implicit ec: ExecutionContext): Future[Either[String, Unit]] =
+  def start(host: String, name: String, timeout: FiniteDuration)(using ec: ExecutionContext): Future[Either[String, Unit]] =
     env.Ws
       .url(api(host, s"/machines/$name/start"))
       .withRequestTimeout(timeout)
@@ -84,11 +85,11 @@ class SmolVmClient(env: Env) {
       .map { r =>
         // tolerate 409: some setups auto-start the machine on create
         if ((r.status >= 200 && r.status < 300) || r.status == 409) Right(())
-        else Left(s"start machine returned ${r.status}: ${r.body.take(512)}")
+        else Left(s"start machine returned ${r.status}: ${r.body[String].take(512)}")
       }
       .recover { case e => Left(s"start machine failed: ${e.getMessage}") }
 
-  def delete(host: String, name: String, timeout: FiniteDuration)(implicit ec: ExecutionContext): Future[Either[String, Unit]] =
+  def delete(host: String, name: String, timeout: FiniteDuration)(using ec: ExecutionContext): Future[Either[String, Unit]] =
     env.Ws
       .url(api(host, s"/machines/$name"))
       .withRequestTimeout(timeout)
@@ -97,7 +98,7 @@ class SmolVmClient(env: Env) {
       .map(okUnit("delete machine"))
       .recover { case e => Left(s"delete machine failed: ${e.getMessage}") }
 
-  def exec(host: String, name: String, req: ExecRequest, timeout: FiniteDuration)(implicit
+  def exec(host: String, name: String, req: ExecRequest, timeout: FiniteDuration)(using
       ec: ExecutionContext
   ): Future[Either[String, ExecResponse]] = {
     logger.debug(s"POST ${api(host, s"/machines/$name/exec")} command=[${req.command.mkString(" ")}] stdin=${req.stdin.fold(0)(_.length)}b")
@@ -111,13 +112,13 @@ class SmolVmClient(env: Env) {
       .map { r =>
         logger.debug(s"smolvm exec -> HTTP ${r.status}")
         if (r.status >= 200 && r.status < 300) ExecResponse.reads(r.json).asEither.left.map(e => s"invalid exec response: $e")
-        else Left(s"exec returned ${r.status}: ${r.body.take(512)}")
+        else Left(s"exec returned ${r.status}: ${r.body[String].take(512)}")
       }
       .recover { case e => Left(s"exec failed: ${e.getMessage}") }
   }
 
   /** Pull an OCI image into a machine (idempotent; fast when cached host-side). */
-  def pullImage(host: String, name: String, image: String, timeout: FiniteDuration)(implicit
+  def pullImage(host: String, name: String, image: String, timeout: FiniteDuration)(using
       ec: ExecutionContext
   ): Future[Either[String, Unit]] =
     env.Ws
@@ -131,7 +132,7 @@ class SmolVmClient(env: Env) {
       .recover { case e => Left(s"pull image failed: ${e.getMessage}") }
 
   /** Upload a file into a machine (PUT /machines/:name/files then path). Used by the node runtime. */
-  def putFile(host: String, name: String, path: String, bytes: ByteString, timeout: FiniteDuration)(implicit
+  def putFile(host: String, name: String, path: String, bytes: ByteString, timeout: FiniteDuration)(using
       ec: ExecutionContext
   ): Future[Either[String, Unit]] = {
     val p = if (path.startsWith("/")) path else s"/$path"
@@ -146,7 +147,7 @@ class SmolVmClient(env: Env) {
   }
 
   /** Probe a forwarded service port: any HTTP answer means the server is listening. */
-  def probe(serviceUrl: String, timeout: FiniteDuration)(implicit ec: ExecutionContext): Future[Boolean] =
+  def probe(serviceUrl: String, timeout: FiniteDuration)(using ec: ExecutionContext): Future[Boolean] =
     env.Ws
       .url(serviceUrl)
       .withRequestTimeout(timeout)
@@ -155,8 +156,8 @@ class SmolVmClient(env: Env) {
       .recover { case _ => false }
 
   /** Reverse-proxy to a forwarded service port, streaming both ways. */
-  def proxy(url: String, method: String, headers: Map[String, String], body: ByteString, timeout: FiniteDuration)(
-      implicit ec: ExecutionContext
+  def proxy(url: String, method: String, headers: Map[String, String], body: ByteString, timeout: FiniteDuration)(using
+      ec: ExecutionContext
   ): Future[SmolProxyResponse] = {
     logger.debug(s"PROXY $method $url (${body.length}b body)")
     // Buffered request AND response (.execute()) to avoid any single-subscriber Source
@@ -165,12 +166,12 @@ class SmolVmClient(env: Env) {
       .url(url)
       .withRequestTimeout(timeout)
       .withMethod(method)
-      .withHttpHeaders(headers.toSeq: _*)
+      .withHttpHeaders(headers.toSeq*)
       .withBody(body)
       .execute()
       .map { resp =>
         logger.debug(s"smolvm proxy $method $url -> HTTP ${resp.status} (${resp.bodyAsBytes.length}b)")
-        SmolProxyResponse(resp.status, resp.headers.mapValues(_.last).toMap, resp.bodyAsBytes)
+        SmolProxyResponse(resp.status, resp.headers.map { case (k, v) => (k, v.last) }, resp.bodyAsBytes)
       }
   }
 }

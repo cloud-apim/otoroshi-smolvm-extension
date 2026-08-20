@@ -38,7 +38,7 @@ docker build -t smolvm-service-node:latest .
 ## Wiring it up
 
 1. Run a smolvm host: `smolvm serve start --listen 0.0.0.0:8080`
-2. Start Otoroshi with `otoroshi-smolvm-extension_2.12-*.jar` on the classpath.
+2. Start Otoroshi with `otoroshi-smolvm-extension_3-*.jar` on the classpath.
 3. Create a route, add the plugin block from the relevant `route.json`, set `hosts` to
    your smolvm host(s) and `image` to your pushed image.
 4. Call the route — a micro-VM is booted per request, runs the function, returns the
