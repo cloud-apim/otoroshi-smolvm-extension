@@ -1,26 +1,26 @@
 package otoroshi_plugins.com.cloud.apim.otoroshi.extensions.smolvm
 
-import akka.actor.Cancellable
 import com.cloud.apim.otoroshi.extensions.smolvm.entities.{KvSmolMachineDataStore, SmolMachine, SmolMachineDataStore}
 import com.cloud.apim.otoroshi.extensions.smolvm.runtime.{SmolMachineManager, SmolStateBackend}
+import org.apache.pekko.actor.Cancellable
 import otoroshi.cluster.ClusterMode
 import otoroshi.env.Env
 import otoroshi.models.EntityLocationSupport
-import otoroshi.next.extensions._
+import otoroshi.next.extensions.*
 import otoroshi.utils.cache.types.UnboundedTrieMap
-import otoroshi.utils.syntax.implicits._
+import otoroshi.utils.syntax.implicits.*
 import play.api.Logger
 import play.api.mvc.Results
 
 import java.util.concurrent.atomic.AtomicReference
-import scala.concurrent.Future
-import scala.concurrent.duration._
+import scala.concurrent.duration.*
+import scala.concurrent.{ExecutionContext, Future}
 
 class SmolMachineDatastores(env: Env, extensionId: AdminExtensionId) {
   val smolMachinesDatastore: SmolMachineDataStore = new KvSmolMachineDataStore(extensionId, env.datastores.redis, env)
 }
 
-class SmolMachineState(env: Env) {
+class SmolMachineState() {
 
   private val machines = new UnboundedTrieMap[String, SmolMachine]()
 
@@ -33,17 +33,17 @@ class SmolMachineState(env: Env) {
 }
 
 object SmolMachineExtension {
-  val logger = Logger("cloud-apim-smolmachine")
-  val id     = AdminExtensionId("cloud-apim.extensions.SmolMachine")
+  val logger: Logger      = Logger("cloud-apim-smolmachine")
+  val id: AdminExtensionId = AdminExtensionId("cloud-apim.extensions.SmolMachine")
 }
 
 class SmolMachineExtension(val env: Env) extends AdminExtension {
 
   private lazy val datastores   = new SmolMachineDatastores(env, id)
-  private lazy val states       = new SmolMachineState(env)
+  private lazy val states       = new SmolMachineState()
   private lazy val stateBackend = SmolStateBackend(env, "smolvm-state", configuration.getOptional[String]("state.uri"))
 
-  lazy val manager = new SmolMachineManager(env, stateBackend)
+  lazy val manager: SmolMachineManager = new SmolMachineManager(env, stateBackend)
 
   private val reaperRef = new AtomicReference[Cancellable]()
 
@@ -60,16 +60,14 @@ class SmolMachineExtension(val env: Env) extends AdminExtension {
     com.cloud.apim.otoroshi.extensions.smolvm.workflows.SmolMachineWorkflowFunctions.registerAll()
     val reaperEnabled = configuration.getOptional[Boolean]("reaper.enabled").getOrElse(true)
     if (reaperEnabled) {
-      implicit val ec = env.otoroshiExecutionContext
-      val interval    = configuration.getOptional[Long]("reaper.interval-ms").getOrElse(30000L).millis
-      val cancellable = env.otoroshiActorSystem.scheduler.scheduleWithFixedDelay(interval, interval)(new Runnable {
-        override def run(): Unit = {
-          val isLeader = env.clusterConfig.mode == ClusterMode.Off || env.clusterConfig.mode.isLeader
-          if (isLeader) {
-            states.allSmolMachines().foreach(m => manager.reconcile(m))
-          }
+      given ec: ExecutionContext = env.otoroshiExecutionContext
+      val interval               = configuration.getOptional[Long]("reaper.interval-ms").getOrElse(30000L).millis
+      val cancellable            = env.otoroshiActorSystem.scheduler.scheduleWithFixedDelay(interval, interval) { () =>
+        val isLeader = env.clusterConfig.mode == ClusterMode.Off || env.clusterConfig.mode.isLeader
+        if (isLeader) {
+          states.allSmolMachines().foreach(m => manager.reconcile(m))
         }
-      })(ec)
+      }
       reaperRef.set(cancellable)
       SmolMachineExtension.logger.info(s"[smolmachine] reconciler (idle GC + dead/orphan cleanup) scheduled every $interval (leader only)")
     }
@@ -80,8 +78,8 @@ class SmolMachineExtension(val env: Env) extends AdminExtension {
   }
 
   override def syncStates(): Future[Unit] = {
-    implicit val ec  = env.otoroshiExecutionContext
-    implicit val ev  = env
+    given ec: ExecutionContext = env.otoroshiExecutionContext
+    given ev: Env              = env
     for {
       machines <- datastores.smolMachinesDatastore.findAll()
     } yield {
@@ -91,7 +89,7 @@ class SmolMachineExtension(val env: Env) extends AdminExtension {
   }
 
   override def entities(): Seq[AdminExtensionEntity[EntityLocationSupport]] = Seq(
-    AdminExtensionEntity(SmolMachine.resource(env, datastores, states))
+    AdminExtensionEntity(SmolMachine.resource(datastores, states))
   )
 
   private def getResourceCode(path: String): String = {

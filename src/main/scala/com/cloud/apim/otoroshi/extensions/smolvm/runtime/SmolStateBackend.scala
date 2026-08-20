@@ -1,15 +1,15 @@
 package com.cloud.apim.otoroshi.extensions.smolvm.runtime
 
-import akka.util.ByteString
 import io.lettuce.core.SetArgs
+import org.apache.pekko.util.ByteString
 import otoroshi.env.Env
 import otoroshi.statefulclients.LettuceStatefulClientConfig
 import otoroshi.storage.RedisLike
 import play.api.Logger
 
 import java.nio.charset.StandardCharsets
-import scala.collection.JavaConverters._
 import scala.concurrent.{ExecutionContext, Future, Promise}
+import scala.jdk.CollectionConverters.*
 
 /**
  * Minimal external state used to make the lazy instance pool cluster-safe: a small set of
@@ -22,13 +22,13 @@ import scala.concurrent.{ExecutionContext, Future, Promise}
  * Values are stored as UTF-8 JSON strings.
  */
 trait SmolStateBackend {
-  def hgetAll(key: String)(implicit ec: ExecutionContext): Future[Map[String, String]]
-  def hset(key: String, field: String, value: String)(implicit ec: ExecutionContext): Future[Unit]
-  def hdel(key: String, field: String)(implicit ec: ExecutionContext): Future[Unit]
-  def incr(key: String)(implicit ec: ExecutionContext): Future[Long]
-  def acquireLock(key: String, ttlMs: Long)(implicit ec: ExecutionContext): Future[Boolean]
-  def releaseLock(key: String)(implicit ec: ExecutionContext): Future[Unit]
-  def del(key: String)(implicit ec: ExecutionContext): Future[Unit]
+  def hgetAll(key: String)(using ec: ExecutionContext): Future[Map[String, String]]
+  def hset(key: String, field: String, value: String)(using ec: ExecutionContext): Future[Unit]
+  def hdel(key: String, field: String)(using ec: ExecutionContext): Future[Unit]
+  def incr(key: String)(using ec: ExecutionContext): Future[Long]
+  def acquireLock(key: String, ttlMs: Long)(using ec: ExecutionContext): Future[Boolean]
+  def releaseLock(key: String)(using ec: ExecutionContext): Future[Unit]
+  def del(key: String)(using ec: ExecutionContext): Future[Unit]
 }
 
 object SmolStateBackend {
@@ -54,62 +54,61 @@ class LettuceStateBackend(env: Env, clientId: String, uri: String) extends SmolS
 
   private def fromJava[T](rf: io.lettuce.core.RedisFuture[T]): Future[T] = {
     val p = Promise[T]()
-    rf.whenComplete(new java.util.function.BiConsumer[T, Throwable] {
-      override def accept(res: T, err: Throwable): Unit =
-        if (err != null) p.failure(err) else p.success(res)
-    })
+    rf.whenComplete { (res: T, err: Throwable) =>
+      if (err != null) p.failure(err) else p.success(res)
+    }
     p.future
   }
 
   private def bs(s: String): ByteString = ByteString(s.getBytes(StandardCharsets.UTF_8))
 
-  override def hgetAll(key: String)(implicit ec: ExecutionContext): Future[Map[String, String]] =
+  override def hgetAll(key: String)(using ec: ExecutionContext): Future[Map[String, String]] =
     fromJava(cmds.hgetall(key)).map(_.asScala.map { case (k, v) => (k, v.utf8String) }.toMap)
 
-  override def hset(key: String, field: String, value: String)(implicit ec: ExecutionContext): Future[Unit] =
+  override def hset(key: String, field: String, value: String)(using ec: ExecutionContext): Future[Unit] =
     fromJava(cmds.hset(key, field, bs(value))).map(_ => ())
 
-  override def hdel(key: String, field: String)(implicit ec: ExecutionContext): Future[Unit] =
+  override def hdel(key: String, field: String)(using ec: ExecutionContext): Future[Unit] =
     fromJava(cmds.hdel(key, field)).map(_ => ())
 
-  override def incr(key: String)(implicit ec: ExecutionContext): Future[Long] =
+  override def incr(key: String)(using ec: ExecutionContext): Future[Long] =
     fromJava(cmds.incr(key)).map(_.longValue())
 
-  override def acquireLock(key: String, ttlMs: Long)(implicit ec: ExecutionContext): Future[Boolean] =
+  override def acquireLock(key: String, ttlMs: Long)(using ec: ExecutionContext): Future[Boolean] =
     fromJava(cmds.set(key, bs("1"), SetArgs.Builder.nx().px(ttlMs))).map(r => r != null && r == "OK")
 
-  override def releaseLock(key: String)(implicit ec: ExecutionContext): Future[Unit] =
+  override def releaseLock(key: String)(using ec: ExecutionContext): Future[Unit] =
     fromJava(cmds.del(key)).map(_ => ())
 
-  override def del(key: String)(implicit ec: ExecutionContext): Future[Unit] =
+  override def del(key: String)(using ec: ExecutionContext): Future[Unit] =
     fromJava(cmds.del(key)).map(_ => ())
 }
 
 /** Fallback backed by otoroshi's own datastore redis (`env.datastores.redis`). */
 class RedisLikeStateBackend(redis: RedisLike, env: Env) extends SmolStateBackend {
 
-  private implicit val ev: Env = env
+  private given ev: Env = env
 
   private def bs(s: String): ByteString = ByteString(s.getBytes(StandardCharsets.UTF_8))
 
-  override def hgetAll(key: String)(implicit ec: ExecutionContext): Future[Map[String, String]] =
+  override def hgetAll(key: String)(using ec: ExecutionContext): Future[Map[String, String]] =
     redis.hgetall(key).map(_.map { case (k, v) => (k, v.utf8String) }.toMap)
 
-  override def hset(key: String, field: String, value: String)(implicit ec: ExecutionContext): Future[Unit] =
+  override def hset(key: String, field: String, value: String)(using ec: ExecutionContext): Future[Unit] =
     redis.hsetBS(key, field, bs(value)).map(_ => ())
 
-  override def hdel(key: String, field: String)(implicit ec: ExecutionContext): Future[Unit] =
+  override def hdel(key: String, field: String)(using ec: ExecutionContext): Future[Unit] =
     redis.hdel(key, field).map(_ => ())
 
-  override def incr(key: String)(implicit ec: ExecutionContext): Future[Long] =
+  override def incr(key: String)(using ec: ExecutionContext): Future[Long] =
     redis.incr(key)
 
-  override def acquireLock(key: String, ttlMs: Long)(implicit ec: ExecutionContext): Future[Boolean] =
+  override def acquireLock(key: String, ttlMs: Long)(using ec: ExecutionContext): Future[Boolean] =
     redis.setnxBS(key, bs("1"), Some(ttlMs))
 
-  override def releaseLock(key: String)(implicit ec: ExecutionContext): Future[Unit] =
+  override def releaseLock(key: String)(using ec: ExecutionContext): Future[Unit] =
     redis.del(key).map(_ => ())
 
-  override def del(key: String)(implicit ec: ExecutionContext): Future[Unit] =
+  override def del(key: String)(using ec: ExecutionContext): Future[Unit] =
     redis.del(key).map(_ => ())
 }

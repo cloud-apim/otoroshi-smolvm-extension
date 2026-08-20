@@ -71,14 +71,14 @@ class ModelsSpec extends munit.FunSuite {
   test("ExecEnvelope.parseResponse decodes base64 body and headers") {
     val b64  = java.util.Base64.getEncoder.encodeToString("pong".getBytes("UTF-8"))
     val out  = s"""{"status":201,"headers":{"content-type":"text/plain"},"body_base64":"$b64"}"""
-    val resp = ExecEnvelope.parseResponse(out).right.get
+    val resp = ExecEnvelope.parseResponse(out).toOption.get
     assertEquals(resp.status, 201)
     assertEquals(resp.headers("content-type"), "text/plain")
     assertEquals(new String(resp.body, "UTF-8"), "pong")
   }
 
   test("ExecEnvelope.parseResponse falls back to plain body and reports invalid json") {
-    val resp = ExecEnvelope.parseResponse("""{"body":"hello"}""").right.get
+    val resp = ExecEnvelope.parseResponse("""{"body":"hello"}""").toOption.get
     assertEquals(new String(resp.body, "UTF-8"), "hello")
     assertEquals(resp.status, 200)
     assert(ExecEnvelope.parseResponse("not json").isLeft)

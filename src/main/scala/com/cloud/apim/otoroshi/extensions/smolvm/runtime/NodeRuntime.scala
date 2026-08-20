@@ -1,12 +1,12 @@
 package com.cloud.apim.otoroshi.extensions.smolvm.runtime
 
-import akka.util.ByteString
 import com.cloud.apim.otoroshi.extensions.smolvm.client.{InvokeResult, SmolInvocation, SmolVmClient}
 import com.cloud.apim.otoroshi.extensions.smolvm.entities.{ExecRequest, ExecResponse, SmolMachineSpec}
+import org.apache.pekko.util.ByteString
 import play.api.Logger
-import play.api.libs.json._
+import play.api.libs.json.*
 
-import scala.concurrent.duration._
+import scala.concurrent.duration.*
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.Try
 
@@ -21,8 +21,8 @@ case class JsRuntimeCommands(
 )
 
 object JsRuntimeCommands {
-  val node = JsRuntimeCommands("node", Seq("node", "-e"), Seq("node", "--input-type=module", "-e"), "npm", Seq("npm", "install"), "npx")
-  val bun  = JsRuntimeCommands("bun", Seq("bun", "-e"), Seq("bun", "-e"), "bun", Seq("bun", "add"), "bunx")
+  val node: JsRuntimeCommands = JsRuntimeCommands("node", Seq("node", "-e"), Seq("node", "--input-type=module", "-e"), "npm", Seq("npm", "install"), "npx")
+  val bun: JsRuntimeCommands  = JsRuntimeCommands("bun", Seq("bun", "-e"), Seq("bun", "-e"), "bun", Seq("bun", "add"), "bunx")
 
   def forRuntime(runtime: String): Option[JsRuntimeCommands] = runtime match {
     case "node" => Some(node)
@@ -50,7 +50,7 @@ object NodeRuntime {
 
   private val logger = Logger("cloud-apim-smolmachine")
 
-  def handle(client: SmolVmClient, host: String, name: String, spec: SmolMachineSpec, inv: SmolInvocation)(implicit
+  def handle(client: SmolVmClient, host: String, name: String, spec: SmolMachineSpec, inv: SmolInvocation)(using
       ec: ExecutionContext
   ): Future[InvokeResult] = {
     val rt       = JsRuntimeCommands.forRuntime(spec.runtime).getOrElse(JsRuntimeCommands.node)

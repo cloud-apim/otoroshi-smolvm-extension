@@ -1,19 +1,19 @@
 package otoroshi_plugins.com.cloud.apim.otoroshi.extensions.smolvm.plugins
 
-import akka.stream.Materializer
-import akka.util.ByteString
 import com.cloud.apim.otoroshi.extensions.smolvm.client.{InvokeResult, SmolInvocation, SmolVmEngine}
+import org.apache.pekko.stream.Materializer
+import org.apache.pekko.util.ByteString
 import otoroshi.env.Env
 import otoroshi.gateway.Errors
-import otoroshi.next.plugins.api._
+import otoroshi.next.plugins.api.*
 import otoroshi.next.proxy.NgProxyEngineError
-import otoroshi.utils.syntax.implicits._
+import otoroshi.utils.syntax.implicits.*
 import play.api.Logger
-import play.api.libs.json._
+import play.api.libs.json.*
 import play.api.mvc.Results
 
 import java.util.concurrent.atomic.AtomicReference
-import scala.concurrent.duration._
+import scala.concurrent.duration.*
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success, Try}
 
@@ -51,9 +51,9 @@ case class SmolVmFunctionConfig(
 
 object SmolVmFunctionConfig {
 
-  val default = SmolVmFunctionConfig()
+  val default: SmolVmFunctionConfig = SmolVmFunctionConfig()
 
-  val format: Format[SmolVmFunctionConfig] = new Format[SmolVmFunctionConfig] {
+  given format: Format[SmolVmFunctionConfig] = new Format[SmolVmFunctionConfig] {
 
     override def writes(o: SmolVmFunctionConfig): JsValue = Json.obj(
       "mode"              -> o.mode,
@@ -176,7 +176,7 @@ object SmolVmFunctionConfig {
       "boot_timeout"      -> Json.obj("type" -> "number", "label" -> "Boot timeout", "props" -> Json.obj("suffix" -> "ms")),
       "isolation"         -> Json.obj("type" -> "select", "label" -> "Isolation", "props" -> Json.obj(
         "options" -> Json.arr(
-          Json.obj("value" -> "ephemeral", "label" -> "ephemeral (VM per request)"),
+          Json.obj("value" -> "ephemeral", "label" -> "ephemeral (VM per request)")
         )
       ))
     )
@@ -217,7 +217,7 @@ class SmolVmFunctionBackend extends NgBackendCall {
   override def defaultConfigObject: Option[NgPluginConfig] = SmolVmFunctionConfig.default.some
   override def configFlow: Seq[String]                     = SmolVmFunctionConfig.configFlow
   override def configSchema: Option[JsObject]              = SmolVmFunctionConfig.configSchema
-  override def noJsForm: Boolean = true
+  override def noJsForm: Boolean                           = true
 
   override def start(env: Env): Future[Unit] = {
     logger.info("[smolvm] plugin loading: instantiating SmolVmEngine singleton")
@@ -230,8 +230,8 @@ class SmolVmFunctionBackend extends NgBackendCall {
   override def callBackend(
       ctx: NgbBackendCallContext,
       delegates: () => Future[Either[NgProxyEngineError, BackendCallResponse]]
-  )(implicit env: Env, ec: ExecutionContext, mat: Materializer): Future[Either[NgProxyEngineError, BackendCallResponse]] = {
-    val config = ctx.cachedConfig(internalName)(SmolVmFunctionConfig.format).getOrElse(SmolVmFunctionConfig.default)
+  )(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Either[NgProxyEngineError, BackendCallResponse]] = {
+    val config  = ctx.cachedConfig(internalName)(SmolVmFunctionConfig.format).getOrElse(SmolVmFunctionConfig.default)
     val startMs = System.currentTimeMillis()
     logger.info(
       s"[${ctx.snowflake}] callBackend ENTER route='${ctx.route.name}' ${ctx.request.method} ${ctx.request.relativeUri} mode=${config.mode}"

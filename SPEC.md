@@ -322,15 +322,15 @@ fournis pour le formulaire back-office.
 ## 9. Packaging & intégration Otoroshi
 
 (Calqué sur `otoroshi-plugin-dynamic-js-modules`.)
-- `build.sbt` : Scala `2.12.13`, sbt `1.9.8`, `organization := "com.cloud-apim"`,
+- `build.sbt` : Scala `3.8.4`, sbt `1.12.9`, `organization := "com.cloud-apim"`,
   `name := "otoroshi-smolvm-extension"`, dépendance
   `"fr.maif" %% "otoroshi" % "<version>" % "provided"` (version à figer ; le template
-  utilise 17.16.0). Pas de wasm4s ici (inutile).
+  utilise 18.0.0-preview2). Pas de wasm4s ici (inutile).
 - Découverte : le plugin est référencé sur une route par
   `"plugin": "cp:otoroshi_plugins.com.cloud.apim.plugins.smolvm.SmolVmFunctionBackend"`
   (le préfixe de package `otoroshi_plugins.*` permet aussi l'auto-référencement UI).
 - `start(env)` : log de disponibilité + instanciation du `SmolVmEngine`.
-- Distribution : JAR `otoroshi-smolvm-extension_2.12-<version>.jar` à déposer sur le
+- Distribution : JAR `otoroshi-smolvm-extension_3-<version>.jar` à déposer sur le
   classpath Otoroshi. CI GitHub Actions (comme le template).
 
 Arborescence (réalisée) :
