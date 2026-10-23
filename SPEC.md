@@ -325,7 +325,7 @@ fournis pour le formulaire back-office.
 - `build.sbt` : Scala `3.8.4`, sbt `1.12.9`, `organization := "com.cloud-apim"`,
   `name := "otoroshi-smolvm-extension"`, dépendance
   `"fr.maif" %% "otoroshi" % "<version>" % "provided"` (version à figer ; le template
-  utilise 18.0.0-preview2). Pas de wasm4s ici (inutile).
+  utilise 18.0.0). Pas de wasm4s ici (inutile).
 - Découverte : le plugin est référencé sur une route par
   `"plugin": "cp:otoroshi_plugins.com.cloud.apim.plugins.smolvm.SmolVmFunctionBackend"`
   (le préfixe de package `otoroshi_plugins.*` permet aussi l'auto-référencement UI).
